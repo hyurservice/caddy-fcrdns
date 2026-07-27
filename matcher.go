@@ -62,23 +62,17 @@ func (m *VerifyFCrDNS) Provision(ctx caddy.Context) error {
 	}
 	m.hostnameRe = re
 
-	switch m.ForwardPolicy {
-	case "", "require_forward_confirm":
-		m.forwardPolicy = fcrdns.RequireForwardConfirm
-	case "allow_forward_failure":
-		m.forwardPolicy = fcrdns.AllowForwardFailure
-	default:
-		return fmt.Errorf("invalid forward_policy %q: must be require_forward_confirm or allow_forward_failure", m.ForwardPolicy)
+	forwardPolicy, err := parseForwardPolicy(m.ForwardPolicy)
+	if err != nil {
+		return err
 	}
+	m.forwardPolicy = forwardPolicy
 
-	switch m.UnknownPolicy {
-	case "", "reject_unknown":
-		m.unknownPolicy = fcrdns.RejectUnknown
-	case "accept_unknown":
-		m.unknownPolicy = fcrdns.AcceptUnknown
-	default:
-		return fmt.Errorf("invalid unknown_policy %q: must be reject_unknown or accept_unknown", m.UnknownPolicy)
+	unknownPolicy, err := parseUnknownPolicy(m.UnknownPolicy)
+	if err != nil {
+		return err
 	}
+	m.unknownPolicy = unknownPolicy
 
 	appIface, err := ctx.App("verify_fcrdns")
 	if err != nil {
@@ -127,6 +121,37 @@ func (m VerifyFCrDNS) Match(r *http.Request) bool {
 	}
 
 	return allowed
+}
+
+// parseForwardPolicy maps a Caddyfile forward_policy token to its enum
+// value. An empty string (the argument was omitted) defaults to
+// RequireForwardConfirm - the stricter of the two - so that a bare
+// `verify_fcrdns <hostname_pattern>` with no further arguments is safe by
+// default rather than silently lenient.
+func parseForwardPolicy(s string) (fcrdns.ForwardConfirmPolicy, error) {
+	switch s {
+	case "", "require_forward_confirm":
+		return fcrdns.RequireForwardConfirm, nil
+	case "allow_forward_failure":
+		return fcrdns.AllowForwardFailure, nil
+	default:
+		return 0, fmt.Errorf("invalid forward_policy %q: must be require_forward_confirm or allow_forward_failure", s)
+	}
+}
+
+// parseUnknownPolicy maps a Caddyfile unknown_policy token to its enum
+// value. An empty string (the argument was omitted) defaults to
+// RejectUnknown - the stricter of the two - for the same reason as
+// parseForwardPolicy.
+func parseUnknownPolicy(s string) (fcrdns.UnknownPolicy, error) {
+	switch s {
+	case "", "reject_unknown":
+		return fcrdns.RejectUnknown, nil
+	case "accept_unknown":
+		return fcrdns.AcceptUnknown, nil
+	default:
+		return 0, fmt.Errorf("invalid unknown_policy %q: must be reject_unknown or accept_unknown", s)
+	}
 }
 
 var (

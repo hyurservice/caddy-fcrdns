@@ -2,6 +2,7 @@ package fcrdns
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,7 +37,7 @@ func (r *countingResolver) callCount() int {
 
 func testCacheConfig() CacheConfig {
 	return CacheConfig{
-		MaxEntries:  1000,
+		MaxBytes:    1_000_000,
 		VerifiedTTL: time.Hour,
 		RejectedTTL: time.Hour,
 		UnknownTTL:  time.Hour,
@@ -139,7 +140,7 @@ func TestCache_UnknownPolicyIsNotPartOfCacheKey(t *testing.T) {
 func TestCache_TTLExpiry(t *testing.T) {
 	resolver := &countingResolver{names: []string{"host.crawl.baidu.com."}}
 	cache, err := NewCache(resolver, CacheConfig{
-		MaxEntries:  1000,
+		MaxBytes:    1_000_000,
 		VerifiedTTL: 20 * time.Millisecond,
 		RejectedTTL: time.Hour,
 		UnknownTTL:  time.Hour,
@@ -249,4 +250,49 @@ func TestCache_ConcurrentDifferentKeysAreNotSerialized(t *testing.T) {
 	if got := resolver.callCount(); got != 2 {
 		t.Errorf("resolver called %d times, want 2 (one per distinct IP)", got)
 	}
+}
+
+func TestCache_SizeIsBoundedByMaxBytes(t *testing.T) {
+	// This cache's keys are derived from request source IPs, which an
+	// attacker can vary freely - if MaxBytes weren't actually enforced, a
+	// flood of distinct fake source IPs would grow the cache unbounded.
+	const maxBytes = 5000
+	const distinctKeys = 2000 // each entry costs >100 bytes, so this alone would be >200KB uncapped
+
+	resolver := &countingResolver{names: []string{"host.crawl.baidu.com."}}
+	cache, err := NewCache(resolver, CacheConfig{
+		MaxBytes:    maxBytes,
+		VerifiedTTL: time.Hour,
+		RejectedTTL: time.Hour,
+		UnknownTTL:  time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	defer cache.Close()
+
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+	ctx := context.Background()
+
+	for i := 0; i < distinctKeys; i++ {
+		cache.Verify(ctx, fmt.Sprintf("10.0.%d.%d", i/256, i%256), pattern, AllowForwardFailure)
+	}
+
+	metrics := cache.Metrics()
+	resident := metrics.CostAdded() - metrics.CostEvicted()
+
+	// Ristretto's admission policy is approximate (TinyLFU-based), not an
+	// exact bound, so allow generous slack rather than asserting resident
+	// == maxBytes exactly - but it must be nowhere near the full cost of
+	// distinctKeys inserted, and eviction must actually have occurred.
+	if resident > maxBytes*3 {
+		t.Errorf("resident cost %d bytes, want no more than roughly %d (maxBytes=%d) - size bound doesn't appear to be enforced",
+			resident, maxBytes*3, maxBytes)
+	}
+	if metrics.KeysEvicted() == 0 {
+		t.Errorf("KeysEvicted() = 0 after inserting %d keys with MaxBytes=%d, want evictions to have occurred",
+			distinctKeys, maxBytes)
+	}
+	t.Logf("inserted %d distinct keys, maxBytes=%d, resident=%d bytes, keysEvicted=%d",
+		distinctKeys, maxBytes, resident, metrics.KeysEvicted())
 }

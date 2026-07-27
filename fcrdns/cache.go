@@ -10,15 +10,33 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// CacheConfig configures a Cache's size bound and per-outcome TTLs.
+// estimatedEntryOverheadBytes is a conservative per-entry estimate covering
+// map bucket bookkeeping, pointers, and GC overhead beyond the raw key
+// string content itself. It's an approximation, not an exact accounting -
+// good enough for bounding memory to the right order of magnitude.
+const estimatedEntryOverheadBytes = 64
+
+// estimatedEntryDefaultBytes is used to translate a byte budget into a
+// NumCounters hint (Ristretto's admission sketch wants roughly 10x the
+// number of items you expect to hold, not a byte count) when we don't yet
+// know the real average key length.
+const estimatedEntryDefaultBytes = 100
+
+// DefaultMaxCacheBytes is a generous default cache memory budget: even at
+// a conservative ~150 bytes/entry, this holds on the order of tens of
+// thousands of entries.
+const DefaultMaxCacheBytes = 10 * 1024 * 1024 // 10 MiB
+
+// CacheConfig configures a Cache's memory bound and per-outcome TTLs.
 type CacheConfig struct {
-	// MaxEntries bounds the number of cached outcomes. Ristretto evicts
-	// using a cost-aware admission policy (TinyLFU) once this is reached,
-	// rather than plain least-recently-used, which gives some resistance
-	// to cache pollution from a flood of one-off keys - relevant here since
-	// this cache's keys are derived from request source IPs, which are
-	// attacker-influenceable.
-	MaxEntries int64
+	// MaxBytes bounds the cache's estimated memory usage (see
+	// estimatedEntryOverheadBytes for how per-entry cost is estimated).
+	// Ristretto evicts using a cost-aware admission policy (TinyLFU) once
+	// this is reached, rather than plain least-recently-used, which gives
+	// some resistance to cache pollution from a flood of one-off keys -
+	// relevant here since this cache's keys are derived from request
+	// source IPs, which are attacker-influenceable.
+	MaxBytes int64
 	// VerifiedTTL, RejectedTTL, and UnknownTTL set how long a cached
 	// Outcome of each kind is trusted before Verify is attempted again.
 	// UnknownTTL should be short: a DNS timeout is often transient, and a
@@ -32,7 +50,7 @@ type CacheConfig struct {
 // DefaultCacheConfig returns reasonable defaults.
 func DefaultCacheConfig() CacheConfig {
 	return CacheConfig{
-		MaxEntries:  50_000,
+		MaxBytes:    DefaultMaxCacheBytes,
 		VerifiedTTL: 24 * time.Hour,
 		RejectedTTL: time.Hour,
 		UnknownTTL:  time.Minute,
@@ -58,13 +76,26 @@ type Cache struct {
 // NewCache creates a Cache that uses resolver for lookups not already
 // cached.
 func NewCache(resolver Resolver, config CacheConfig) (*Cache, error) {
-	if config.MaxEntries <= 0 {
-		config.MaxEntries = DefaultCacheConfig().MaxEntries
+	if config.MaxBytes <= 0 {
+		config.MaxBytes = DefaultCacheConfig().MaxBytes
 	}
+
+	expectedEntries := config.MaxBytes / estimatedEntryDefaultBytes
+	if expectedEntries < 1000 {
+		expectedEntries = 1000
+	}
+
 	store, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: config.MaxEntries * 10,
-		MaxCost:     config.MaxEntries,
+		NumCounters: expectedEntries * 10,
+		MaxCost:     config.MaxBytes,
 		BufferItems: 64,
+		Metrics:     true,
+		// We estimate and supply our own per-entry byte cost (see
+		// entryCost), so Ristretto must not additionally add its own
+		// internal per-item storage-overhead guess on top of that -
+		// otherwise the effective budget would be a mix of our explicit
+		// estimate and an opaque one we don't control.
+		IgnoreInternalCost: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating ristretto cache: %w", err)
@@ -74,6 +105,11 @@ func NewCache(resolver Resolver, config CacheConfig) (*Cache, error) {
 
 func cacheKey(ip string, hostnamePattern *regexp.Regexp, forwardPolicy ForwardConfirmPolicy) string {
 	return ip + "|" + hostnamePattern.String() + "|" + forwardPolicy.String()
+}
+
+// entryCost estimates the memory cost, in bytes, of caching the given key.
+func entryCost(key string) int64 {
+	return int64(len(key)) + estimatedEntryOverheadBytes
 }
 
 // Verify behaves like the package-level Verify function, but consults the
@@ -101,7 +137,7 @@ func (c *Cache) Verify(ctx context.Context, ip string, hostnamePattern *regexp.R
 		}
 
 		outcome := Verify(ctx, c.resolver, ip, hostnamePattern, forwardPolicy)
-		c.store.SetWithTTL(key, outcome, 1, c.ttlFor(outcome))
+		c.store.SetWithTTL(key, outcome, entryCost(key), c.ttlFor(outcome))
 		c.store.Wait()
 		return outcome, nil
 	})
@@ -124,4 +160,10 @@ func (c *Cache) ttlFor(outcome Outcome) time.Duration {
 // Cache is no longer needed (e.g. on Caddy module cleanup/reprovision).
 func (c *Cache) Close() {
 	c.store.Close()
+}
+
+// Metrics exposes the underlying cache's hit/miss/eviction counters, for
+// monitoring and for tests that need to confirm the size bound is enforced.
+func (c *Cache) Metrics() *ristretto.Metrics {
+	return c.store.Metrics
 }

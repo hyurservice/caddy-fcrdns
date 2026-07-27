@@ -10,7 +10,7 @@ Some crawlers (Google, Bing, Anthropic, OpenAI, and others) publish a static
 list of their IP ranges, so verifying them is just an IP-list membership
 check. Others - Baidu, Yahoo Slurp, Amazonbot - don't publish one at all, and
 instead document reverse-DNS verification: check that the request's source
-IP has a PTR record ending in a known suffix (e.g. `.crawl.baidu.com`), and
+IP has a PTR record ending in a known suffix (e.g. `.crawl.yahoo.net`), and
 optionally confirm that hostname's forward (A/AAAA) lookup resolves back to
 the same IP.
 
@@ -50,20 +50,24 @@ claiming to be the crawler in question:
 
 ```caddyfile
 example.com {
-    @baidu_verified {
-        header_regexp User-Agent `(?i)baiduspider`
-        verify_fcrdns `\.crawl\.baidu\.com$`
+    @googlebot_verified {
+        header_regexp User-Agent `(?i)googlebot`
+        verify_fcrdns `\.googlebot\.com$`
     }
 
-    handle @baidu_verified {
+    handle @googlebot_verified {
         # skip your WAF/rate-limit/challenge pipeline for confirmed crawlers
     }
     handle {
-        # everyone else, including UAs that claim to be Baiduspider but
+        # everyone else, including UAs that claim to be Googlebot but
         # don't verify
     }
 }
 ```
+
+(Google and Bing both publish static IP ranges too, which is a simpler
+alternative when available - see the ["Why"](#why) section. Googlebot is
+used here purely as a widely-recognized illustration of the technique.)
 
 ### Distinguishing a confirmed spoof from an inconclusive check
 
@@ -76,12 +80,12 @@ an inconclusive lookup like ordinary unverified traffic, call the matcher
 twice with opposite `unknown_policy` values and compose with `not`:
 
 ```caddyfile
-@baidu_confirmed_spoof {
-    header_regexp User-Agent `(?i)baiduspider`
-    not verify_fcrdns `\.crawl\.baidu\.com$` allow_forward_failure accept_unknown
+@googlebot_confirmed_spoof {
+    header_regexp User-Agent `(?i)googlebot`
+    not verify_fcrdns `\.googlebot\.com$` require_forward_confirm accept_unknown
 }
 
-handle @baidu_confirmed_spoof {
+handle @googlebot_confirmed_spoof {
     abort
 }
 ```

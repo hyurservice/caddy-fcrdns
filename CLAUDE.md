@@ -95,12 +95,31 @@ has no forward A record at all (NXDOMAIN), despite both being real Baidu
 crawler IPs. Both cases are captured as tests in `fcrdns/verify_test.go`
 (`TestVerify_StrictPass`, `TestVerify_LenientPassDespiteForwardFailure`).
 
-**Only Baidu's hostname pattern (`\.crawl\.baidu\.com$`) and forward-confirm
-behavior have been validated this way.** Yahoo Slurp (`crawl.yahoo.net`,
-notably gated behind Yahoo's own CAPTCHA when queried directly) and Amazonbot
-(`crawl.amazonbot.amazon`) have documented patterns but haven't been checked
-against live DNS data yet - do that (same `host`/`dig` technique, no need for
-real crawler traffic) before treating their config as validated, and add the
+Googlebot has also been validated this way (used in README.md as the primary
+example, since Baidu isn't a great first impression for a public README):
+`66.249.66.1`, `66.249.66.10`, and `66.249.79.35` all reverse-resolve to
+`crawl-<ip>.googlebot.com` and all forward-confirm cleanly - no
+`allow_forward_failure` gap like Baidu's, so Googlebot doesn't illustrate
+that particular policy well, which is why the Baidu data stays in README.md
+specifically for that callout.
+
+**Amazonbot: tried to validate, and it revealed a different problem worth
+knowing about.** A community-sourced IP list (`rezmoss/cloud-provider-ip-
+addresses`) claims to list Amazonbot IPs, but querying several of them
+(`3.81.194.188`, `3.81.253.151`, `3.82.29.30`, etc.) shows generic
+`ec2-<ip>.compute-1.amazonaws.com` reverse DNS - not Amazon's documented
+`crawl.amazonbot.amazon` pattern at all. AWS's IP space churns constantly, so
+a scraped/community list for an AWS-hosted crawler is likely picking up
+stale or reassigned generic EC2 instances rather than genuine current
+Amazonbot traffic. **Don't trust a third-party Amazonbot IP list as a source
+of real example IPs** - if Amazonbot support is ever added, it needs IPs
+obtained some other way (e.g. from actual observed request logs of a site
+Amazonbot is known to crawl) to validate against.
+
+Yahoo Slurp (`crawl.yahoo.net`) has a documented pattern but hasn't been
+checked against live DNS data yet (Yahoo's own site is gated behind a
+CAPTCHA when queried directly, which may complicate finding real IPs to test
+against) - do that before treating its config as validated, and add the
 findings as tests the same way.
 
 ## Testing conventions
@@ -129,8 +148,9 @@ findings as tests the same way.
 
 ## Not yet done
 
-- Yahoo Slurp and Amazonbot DNS patterns aren't validated against live data
-  (see above).
+- Yahoo Slurp isn't validated against live data yet (see above).
+- Amazonbot needs a real (non-community-sourced) source of example IPs
+  before it can be validated at all (see above).
 - Not wired into `../containers/hyurservice/caddy/Dockerfile` or its
   Caddyfile yet.
 - No CI configured.

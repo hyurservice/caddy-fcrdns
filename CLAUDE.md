@@ -116,11 +116,27 @@ of real example IPs** - if Amazonbot support is ever added, it needs IPs
 obtained some other way (e.g. from actual observed request logs of a site
 Amazonbot is known to crawl) to validate against.
 
-Yahoo Slurp (`crawl.yahoo.net`) has a documented pattern but hasn't been
-checked against live DNS data yet (Yahoo's own site is gated behind a
-CAPTCHA when queried directly, which may complicate finding real IPs to test
-against) - do that before treating its config as validated, and add the
-findings as tests the same way.
+**Yahoo Slurp: tried to validate, came back inconclusive - not the same as
+"not yet tried."** Yahoo's documented verification method is a PTR hostname
+ending in `.crawl.yahoo.net`. Sampled ~15 IPs across two independent
+historical/community sources (a 2008 news article's example IP, and the
+2020 `bienthuy/Search-Engine-IP-Range` list's `74.6.0.0/16` and
+`8.12.144.0/24` ranges, plus a broader manual spread within `74.6.0.0/16`)
+and found zero matches for `.crawl.yahoo.net`. What showed up instead:
+`unknown.yahoo.com` (a generic placeholder, across multiple unrelated
+ranges) and what's clearly Yahoo's internal network/corporate
+infrastructure (e.g. `vl-120.tor5-6-pda.gq1.yahoo.com`, and one explicitly
+under `corp.gq1.yahoo.com`). Directly resolving `crawl.yahoo.net` itself
+just points to an AWS Global Accelerator endpoint, not any individual
+crawler host. Best interpretation: the historical/community "Yahoo IP
+ranges" floating around are Yahoo's general corporate netblock, not a
+crawler-specific one, and actual Slurp crawl volume may now be small enough
+(Yahoo Search runs on Bing's index today) that a live example is genuinely
+hard to find by guessing ranges. **Don't add a Yahoo Slurp config entry
+without first finding a real, currently-active source of example IPs** (e.g.
+observed request logs from a site Slurp is known to still crawl) - guessing
+from any of the sources above didn't work, so trying more of the same kind
+of source isn't likely to either.
 
 ## Testing conventions
 
@@ -148,9 +164,10 @@ findings as tests the same way.
 
 ## Not yet done
 
-- Yahoo Slurp isn't validated against live data yet (see above).
-- Amazonbot needs a real (non-community-sourced) source of example IPs
-  before it can be validated at all (see above).
+- Yahoo Slurp and Amazonbot both need a real (non-community-sourced,
+  non-historical) source of example IPs before they can be validated at all
+  - guessing from IP ranges circulating online didn't work for either (see
+  above).
 - Not wired into `../containers/hyurservice/caddy/Dockerfile` or its
   Caddyfile yet.
 - No CI configured.

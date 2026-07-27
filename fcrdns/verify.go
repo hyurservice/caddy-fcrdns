@@ -137,16 +137,30 @@ func (o Outcome) Allowed(unknownPolicy UnknownPolicy) bool {
 	}
 }
 
+// Detail carries additional information about a Verify call, useful for
+// logging/debugging. It plays no role in Outcome or Allowed's decisions.
+type Detail struct {
+	// MatchedHostname is the PTR hostname that matched hostnamePattern, if
+	// any.
+	MatchedHostname string
+	// ForwardChecked is true if a forward lookup was attempted (i.e. a PTR
+	// hostname matched, and forwardPolicy was RequireForwardConfirm).
+	ForwardChecked bool
+	// Err is the underlying error from whichever lookup produced a
+	// non-Verified outcome, if any.
+	Err error
+}
+
 // Verify performs a forward-confirmed reverse DNS check on ip: it looks up
 // ip's PTR record(s), checks whether any of the returned hostnames match
 // hostnamePattern, and - depending on forwardPolicy - confirms that
 // hostname's forward lookup resolves back to ip.
 //
 // ctx should carry a deadline; Verify does not impose its own timeout.
-func Verify(ctx context.Context, resolver Resolver, ip string, hostnamePattern *regexp.Regexp, forwardPolicy ForwardConfirmPolicy) Outcome {
+func Verify(ctx context.Context, resolver Resolver, ip string, hostnamePattern *regexp.Regexp, forwardPolicy ForwardConfirmPolicy) (Outcome, Detail) {
 	names, err := resolver.LookupAddr(ctx, ip)
 	if err != nil {
-		return outcomeForLookupError(ctx, err)
+		return outcomeForLookupError(ctx, err), Detail{Err: err}
 	}
 
 	matched := ""
@@ -157,25 +171,25 @@ func Verify(ctx context.Context, resolver Resolver, ip string, hostnamePattern *
 		}
 	}
 	if matched == "" {
-		return OutcomeRejected
+		return OutcomeRejected, Detail{}
 	}
 
 	if forwardPolicy == AllowForwardFailure {
-		return OutcomeVerified
+		return OutcomeVerified, Detail{MatchedHostname: matched}
 	}
 
 	addrs, err := resolver.LookupHost(ctx, matched)
 	if err != nil {
-		return outcomeForLookupError(ctx, err)
+		return outcomeForLookupError(ctx, err), Detail{MatchedHostname: matched, ForwardChecked: true, Err: err}
 	}
 
 	target := net.ParseIP(ip)
 	for _, addr := range addrs {
 		if parsed := net.ParseIP(addr); parsed != nil && target != nil && parsed.Equal(target) {
-			return OutcomeVerified
+			return OutcomeVerified, Detail{MatchedHostname: matched, ForwardChecked: true}
 		}
 	}
-	return OutcomeRejected
+	return OutcomeRejected, Detail{MatchedHostname: matched, ForwardChecked: true}
 }
 
 // outcomeForLookupError classifies a DNS lookup error as either a confirmed

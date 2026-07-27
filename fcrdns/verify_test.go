@@ -53,7 +53,7 @@ func TestVerify_StrictPass(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "220.181.108.108", pattern, RequireForwardConfirm)
+	got, _ := Verify(context.Background(), resolver, "220.181.108.108", pattern, RequireForwardConfirm)
 	if got != OutcomeVerified {
 		t.Errorf("got %v, want %v", got, OutcomeVerified)
 	}
@@ -75,7 +75,7 @@ func TestVerify_LenientPassDespiteForwardFailure(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "180.76.15.15", pattern, AllowForwardFailure)
+	got, _ := Verify(context.Background(), resolver, "180.76.15.15", pattern, AllowForwardFailure)
 	if got != OutcomeVerified {
 		t.Errorf("got %v, want %v", got, OutcomeVerified)
 	}
@@ -97,7 +97,7 @@ func TestVerify_StrictRejectsSameHostnameWithoutForwardConfirm(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "180.76.15.15", pattern, RequireForwardConfirm)
+	got, _ := Verify(context.Background(), resolver, "180.76.15.15", pattern, RequireForwardConfirm)
 	if got != OutcomeRejected {
 		t.Errorf("got %v, want %v", got, OutcomeRejected)
 	}
@@ -115,7 +115,7 @@ func TestVerify_RejectedHostnameDoesNotMatchPattern(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
 	if got != OutcomeRejected {
 		t.Errorf("got %v, want %v", got, OutcomeRejected)
 	}
@@ -133,7 +133,7 @@ func TestVerify_RejectedNoPTRRecord(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
 	if got != OutcomeRejected {
 		t.Errorf("got %v, want %v", got, OutcomeRejected)
 	}
@@ -150,7 +150,7 @@ func TestVerify_RejectedForwardResolvesToDifferentIP(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, RequireForwardConfirm)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, RequireForwardConfirm)
 	if got != OutcomeRejected {
 		t.Errorf("got %v, want %v", got, OutcomeRejected)
 	}
@@ -169,7 +169,7 @@ func TestVerify_ForwardConfirmIPv6Equivalence(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "2001:db8::1", pattern, RequireForwardConfirm)
+	got, _ := Verify(context.Background(), resolver, "2001:db8::1", pattern, RequireForwardConfirm)
 	if got != OutcomeVerified {
 		t.Errorf("got %v, want %v", got, OutcomeVerified)
 	}
@@ -187,7 +187,7 @@ func TestVerify_UnknownOnPTRTimeout(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
 	if got != OutcomeUnknown {
 		t.Errorf("got %v, want %v", got, OutcomeUnknown)
 	}
@@ -204,7 +204,7 @@ func TestVerify_UnknownOnForwardTimeout(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, RequireForwardConfirm)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, RequireForwardConfirm)
 	if got != OutcomeUnknown {
 		t.Errorf("got %v, want %v", got, OutcomeUnknown)
 	}
@@ -224,7 +224,7 @@ func TestVerify_UnknownWhenContextDeadlineExceeded(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(ctx, resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	got, _ := Verify(ctx, resolver, "1.2.3.4", pattern, AllowForwardFailure)
 	if got != OutcomeUnknown {
 		t.Errorf("got %v, want %v", got, OutcomeUnknown)
 	}
@@ -244,7 +244,7 @@ func TestVerify_UnknownOnUnrecognizedErrorType(t *testing.T) {
 	}
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
 	if got != OutcomeUnknown {
 		t.Errorf("got %v, want %v", got, OutcomeUnknown)
 	}
@@ -263,9 +263,95 @@ func TestVerify_TrailingDotInPTRNameIsNormalized(t *testing.T) {
 	// trailing "." from the PTR record weren't stripped first.
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 
-	got := Verify(context.Background(), resolver, "1.2.3.4", pattern, RequireForwardConfirm)
+	got, _ := Verify(context.Background(), resolver, "1.2.3.4", pattern, RequireForwardConfirm)
 	if got != OutcomeVerified {
 		t.Errorf("got %v, want %v", got, OutcomeVerified)
+	}
+}
+
+func TestVerify_DetailOnStrictPass(t *testing.T) {
+	resolver := fakeResolver{
+		lookupAddr: func(ctx context.Context, ip string) ([]string, error) {
+			return []string{"baiduspider-220-181-108-108.crawl.baidu.com."}, nil
+		},
+		lookupHost: func(ctx context.Context, host string) ([]string, error) {
+			return []string{"220.181.108.108"}, nil
+		},
+	}
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+
+	_, detail := Verify(context.Background(), resolver, "220.181.108.108", pattern, RequireForwardConfirm)
+	if detail.MatchedHostname != "baiduspider-220-181-108-108.crawl.baidu.com." {
+		t.Errorf("MatchedHostname = %q, want the matched PTR name", detail.MatchedHostname)
+	}
+	if !detail.ForwardChecked {
+		t.Errorf("ForwardChecked = false, want true under RequireForwardConfirm")
+	}
+	if detail.Err != nil {
+		t.Errorf("Err = %v, want nil on a clean pass", detail.Err)
+	}
+}
+
+func TestVerify_DetailOnLenientPassSkipsForwardCheck(t *testing.T) {
+	resolver := fakeResolver{
+		lookupAddr: func(ctx context.Context, ip string) ([]string, error) {
+			return []string{"baiduspider-180-76-15-15.crawl.baidu.com."}, nil
+		},
+		lookupHost: func(ctx context.Context, host string) ([]string, error) {
+			return nil, notFoundErr()
+		},
+	}
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+
+	_, detail := Verify(context.Background(), resolver, "180.76.15.15", pattern, AllowForwardFailure)
+	if detail.MatchedHostname != "baiduspider-180-76-15-15.crawl.baidu.com." {
+		t.Errorf("MatchedHostname = %q, want the matched PTR name", detail.MatchedHostname)
+	}
+	if detail.ForwardChecked {
+		t.Errorf("ForwardChecked = true, want false - AllowForwardFailure should skip the forward step entirely")
+	}
+	if detail.Err != nil {
+		t.Errorf("Err = %v, want nil - AllowForwardFailure never even attempts the forward lookup", detail.Err)
+	}
+}
+
+func TestVerify_DetailCarriesUnderlyingError(t *testing.T) {
+	wantErr := timeoutErr()
+	resolver := fakeResolver{
+		lookupAddr: func(ctx context.Context, ip string) ([]string, error) {
+			return nil, wantErr
+		},
+		lookupHost: func(ctx context.Context, host string) ([]string, error) {
+			return nil, nil
+		},
+	}
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+
+	_, detail := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	if detail.Err != wantErr {
+		t.Errorf("Err = %v, want the exact underlying resolver error so it can be logged", detail.Err)
+	}
+}
+
+func TestVerify_DetailOnRejectedHasNoError(t *testing.T) {
+	// A confirmed mismatch (as opposed to a lookup failure) has no error to
+	// report - Detail.Err should stay nil, not be synthesized.
+	resolver := fakeResolver{
+		lookupAddr: func(ctx context.Context, ip string) ([]string, error) {
+			return []string{"some-host.evil-example.com."}, nil
+		},
+		lookupHost: func(ctx context.Context, host string) ([]string, error) {
+			return nil, nil
+		},
+	}
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+
+	outcome, detail := Verify(context.Background(), resolver, "1.2.3.4", pattern, AllowForwardFailure)
+	if outcome != OutcomeRejected {
+		t.Fatalf("got %v, want %v", outcome, OutcomeRejected)
+	}
+	if detail.Err != nil {
+		t.Errorf("Err = %v, want nil - this was a confirmed mismatch, not a lookup failure", detail.Err)
 	}
 }
 

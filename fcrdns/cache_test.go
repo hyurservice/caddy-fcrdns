@@ -55,11 +55,17 @@ func TestCache_HitAvoidsSecondLookup(t *testing.T) {
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 	ctx := context.Background()
 
-	first := cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
-	second := cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
+	first, _, firstHit := cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
+	second, _, secondHit := cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
 
 	if first != OutcomeVerified || second != OutcomeVerified {
 		t.Fatalf("got first=%v second=%v, want both %v", first, second, OutcomeVerified)
+	}
+	if firstHit {
+		t.Errorf("first call reported cacheHit=true, want false (nothing was cached yet)")
+	}
+	if !secondHit {
+		t.Errorf("second call reported cacheHit=false, want true (first call should have cached it)")
 	}
 	if got := resolver.callCount(); got != 1 {
 		t.Errorf("resolver called %d times, want 1 (second call should be a cache hit)", got)
@@ -121,7 +127,7 @@ func TestCache_UnknownPolicyIsNotPartOfCacheKey(t *testing.T) {
 	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
 	ctx := context.Background()
 
-	outcome := cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
+	outcome, _, _ := cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
 	if outcome != OutcomeUnknown {
 		t.Fatalf("got %v, want %v", outcome, OutcomeUnknown)
 	}
@@ -185,7 +191,7 @@ func TestCache_ConcurrentIdenticalCallsAreDeduplicated(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			results[i] = cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
+			results[i], _, _ = cache.Verify(ctx, "1.2.3.4", pattern, AllowForwardFailure)
 		}(i)
 	}
 

@@ -112,18 +112,44 @@ func entryCost(key string) int64 {
 	return int64(len(key)) + estimatedEntryOverheadBytes
 }
 
+// cachedResult is what's actually stored in the cache - both the Outcome
+// (which drives the TTL and Allowed()) and the Detail (kept around so a
+// cache hit can still be logged with the same information a fresh lookup
+// would have provided).
+type cachedResult struct {
+	outcome Outcome
+	detail  Detail
+}
+
+// groupResult additionally tracks whether this particular call performed a
+// fresh lookup or found (or waited for) an already-cached value, so Verify
+// can report cacheHit accurately even when multiple concurrent callers are
+// deduplicated by singleflight.
+type groupResult struct {
+	cachedResult
+	fresh bool
+}
+
 // Verify behaves like the package-level Verify function, but consults the
 // cache first and stores the result afterward. Concurrent calls for the
 // same (ip, hostnamePattern, forwardPolicy) are deduplicated: only one
 // actual DNS lookup sequence runs at a time per key, and other callers for
 // that same key wait for its result rather than each performing their own
 // lookup.
-func (c *Cache) Verify(ctx context.Context, ip string, hostnamePattern *regexp.Regexp, forwardPolicy ForwardConfirmPolicy) Outcome {
+//
+// The returned bool is true if this call's answer came from an entry that
+// was already cached before this call started. It's false both for the
+// call that actually performs a fresh lookup and for any other concurrent
+// calls deduplicated alongside it by singleflight (none of them found a
+// pre-existing entry, even though only one of them did the real work) -
+// useful for logging, but not a precise "did I personally do a lookup"
+// signal.
+func (c *Cache) Verify(ctx context.Context, ip string, hostnamePattern *regexp.Regexp, forwardPolicy ForwardConfirmPolicy) (Outcome, Detail, bool) {
 	key := cacheKey(ip, hostnamePattern, forwardPolicy)
 
 	if v, ok := c.store.Get(key); ok {
-		if outcome, ok := v.(Outcome); ok {
-			return outcome
+		if cached, ok := v.(cachedResult); ok {
+			return cached.outcome, cached.detail, true
 		}
 	}
 
@@ -131,18 +157,20 @@ func (c *Cache) Verify(ctx context.Context, ip string, hostnamePattern *regexp.R
 		// Re-check: another goroutine may have populated the cache between
 		// our Get above and singleflight scheduling this function.
 		if v, ok := c.store.Get(key); ok {
-			if outcome, ok := v.(Outcome); ok {
-				return outcome, nil
+			if cached, ok := v.(cachedResult); ok {
+				return groupResult{cachedResult: cached, fresh: false}, nil
 			}
 		}
 
-		outcome := Verify(ctx, c.resolver, ip, hostnamePattern, forwardPolicy)
-		c.store.SetWithTTL(key, outcome, entryCost(key), c.ttlFor(outcome))
+		outcome, detail := Verify(ctx, c.resolver, ip, hostnamePattern, forwardPolicy)
+		result := cachedResult{outcome: outcome, detail: detail}
+		c.store.SetWithTTL(key, result, entryCost(key), c.ttlFor(outcome))
 		c.store.Wait()
-		return outcome, nil
+		return groupResult{cachedResult: result, fresh: true}, nil
 	})
 
-	return v.(Outcome)
+	gr := v.(groupResult)
+	return gr.outcome, gr.detail, !gr.fresh
 }
 
 func (c *Cache) ttlFor(outcome Outcome) time.Duration {

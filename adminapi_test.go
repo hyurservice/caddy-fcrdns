@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -189,6 +190,35 @@ func TestHandleCacheList_LimitIsRespected(t *testing.T) {
 	}
 	if out.Returned != 1 || len(out.Entries) != 1 {
 		t.Errorf("Returned = %d, len(Entries) = %d, want 1", out.Returned, len(out.Entries))
+	}
+}
+
+func TestHandleCacheList_LimitInfReturnsEverything(t *testing.T) {
+	app := newTestApp(t, fakeResolver{names: []string{"host.crawl.baidu.com."}})
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+	ctx := context.Background()
+	// More than the old hard cap would have allowed, to prove there's no
+	// server-side ceiling being silently applied.
+	const distinctIPs = 25
+	for i := 0; i < distinctIPs; i++ {
+		app.cache.Verify(ctx, fmt.Sprintf("10.0.0.%d", i), pattern, fcrdns.AllowForwardFailure)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/verify_fcrdns/cache?limit=inf", nil)
+	rec := httptest.NewRecorder()
+	if err := handleCacheList(rec, req); err != nil {
+		t.Fatalf("handleCacheList: %v", err)
+	}
+
+	var out cacheListJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if out.TotalEntries != distinctIPs {
+		t.Errorf("TotalEntries = %d, want %d", out.TotalEntries, distinctIPs)
+	}
+	if out.Returned != distinctIPs || len(out.Entries) != distinctIPs {
+		t.Errorf("Returned = %d, len(Entries) = %d, want %d", out.Returned, len(out.Entries), distinctIPs)
 	}
 }
 

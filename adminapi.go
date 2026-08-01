@@ -3,6 +3,7 @@ package caddyfcrdns
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -19,7 +20,6 @@ func init() {
 
 const (
 	defaultCacheListLimit = 20
-	maxCacheListLimit     = 1000
 	maxTableColumnWidth   = 40
 )
 
@@ -85,14 +85,17 @@ func handleCacheList(w http.ResponseWriter, r *http.Request) error {
 
 	limit := defaultCacheListLimit
 	if s := r.URL.Query().Get("limit"); s != "" {
-		n, err := strconv.Atoi(s)
-		if err != nil || n < 1 {
-			return caddy.APIError{HTTPStatus: http.StatusBadRequest, Err: fmt.Errorf("invalid limit %q: must be a positive integer", s)}
+		if s == "inf" {
+			// No server-side hard cap - "inf" means "give me everything
+			// currently tracked," however large that turns out to be.
+			limit = math.MaxInt
+		} else {
+			n, err := strconv.Atoi(s)
+			if err != nil || n < 1 {
+				return caddy.APIError{HTTPStatus: http.StatusBadRequest, Err: fmt.Errorf(`invalid limit %q: must be a positive integer or "inf"`, s)}
+			}
+			limit = n
 		}
-		limit = n
-	}
-	if limit > maxCacheListLimit {
-		limit = maxCacheListLimit
 	}
 
 	colorsEnabled := true

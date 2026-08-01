@@ -209,11 +209,12 @@ bearing on whether the `curl` caller viewing this wants color. Pass
 doesn't interpret ANSI codes, which would otherwise show the raw escape
 bytes rather than an absence of color).
 
-`limit` defaults to 20 and is capped at 1000 server-side; `total_entries`
-always reflects the full cache regardless of `limit`, so you can tell "am I
-seeing everything, or just the top few". `hits` counts every `Verify` call
-for that key - cache hits and fresh lookups alike, including concurrent
-requests deduplicated against an in-flight lookup - not just cache hits.
+`limit` defaults to 20; there's no server-side cap, and `&limit=inf` returns
+every currently-cached entry. `total_entries` always reflects the full cache
+regardless of `limit`, so you can tell "am I seeing everything, or just the
+top few". `hits` counts every `Verify` call for that key - cache hits and
+fresh lookups alike, including concurrent requests deduplicated against an
+in-flight lookup - not just cache hits.
 
 This is a read-only debugging view: Ristretto (the underlying cache) has no
 enumeration API by design, so this endpoint is backed by a separate

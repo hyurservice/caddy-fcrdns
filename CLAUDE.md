@@ -246,6 +246,36 @@ there is no official pattern to validate against, and unlike Yahoo/Amazonbot
 here the "official pattern" itself would have to be invented from
 unofficial sources first.
 
+**Facebook/Meta ASN check: works, but not worth implementing right now.**
+Since Meta doesn't document FCrDNS, checked whether ASN membership could
+serve as an alternative signal instead. Queried `whois.cymru.com` for real
+Facebook/Meta IP ranges spanning all four RIRs (ARIN, RIPE NCC, LACNIC,
+AFRINIC), IPv4 and IPv6, and both the classic `facebookexternalhit`
+link-preview crawler's ranges and the newer `Meta-ExternalAgent` AI-training
+crawler's ranges (e.g. `57.141.0.0/24`) - every single one sits under the
+same dedicated `AS32934` ("FACEBOOK - Facebook, Inc., US"). This is
+structurally different from Amazonbot: Amazon's crawler runs on shared AWS
+EC2 space (a generic cloud ASN with millions of unrelated tenants, so ASN
+membership proves nothing crawler-specific), while Meta owns and announces
+its own dedicated IP space, so ASN membership is a genuinely strong,
+Meta-specific signal. Also confirmed this isn't something Meta documents
+either - checked their two official crawler pages again specifically for
+ASN/AS32934 and found nothing.
+
+Decided not to pursue it further, for two concrete reasons: (1) it would
+require new infrastructure this stack doesn't have -
+`../containers/hyurservice`'s existing `shift72/caddy-geo-ip` module only
+does country-level MaxMind lookups, so ASN matching would need a different
+module (e.g. `lum8rjack/caddy-maxmind-asn` or `porech/caddy-maxmind-
+geolocation`) plus MaxMind's separate `GeoLite2-ASN.mmdb`, neither in place
+today; (2) unlike Amazonbot, there's already a working static list to fall
+back on - `../containers/hyurservice/caddy/ip-blocklists/allowed-ips.caddy`
+has a `FacebookBot (via sefinek/trusted-ips-whitelist)` section with 1053
+CIDR entries that substantially match the real AS32934 footprint found
+here (e.g. `157.240.0.0/16`, `173.252.64.0/19`, `129.134.0.0/17`,
+`2a03:2880::/32`) - unlike the Amazonbot community list, which turned out
+to be bogus, this one holds up under spot-checking against real WHOIS data.
+
 ## Testing conventions
 
 - `fcrdns` package tests use a fake `Resolver` (function fields), never real

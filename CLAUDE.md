@@ -204,6 +204,48 @@ observed request logs from a site Slurp is known to still crawl) - guessing
 from any of the sources above didn't work, so trying more of the same kind
 of source isn't likely to either.
 
+**Bing: officially documented, and validated clean - no forward-confirmation
+gap like Baidu's.** Bing's own docs (`bing.com/webmasters/help/how-to-verify-
+bingbot-3905dc26`, and the 2012 Bing Webmaster Blog post "How to Verify that
+Bingbot is Bingbot," which is still what gets cited as current guidance)
+state the method explicitly: reverse DNS must resolve to a hostname ending
+in `search.msn.com`, forward-confirmed back to the same IP - and explicitly
+warn *against* relying on a static IP list instead, since ranges "can change
+any time." Pulled 4 IPs directly from Bing's own currently-published
+`bingbot.json` (the file `../containers/hyurservice/cron/scripts/update-
+allowed-ips.sh` already fetches for the static allowlist) across different
+prefixes - `157.55.39.1`, `40.77.202.1`, `40.77.167.10`, `207.46.13.5` - and
+all four reverse-resolve to `msnbot-<ip-with-dashes>.search.msn.com` and
+forward-confirm cleanly. One caveat: a Microsoft Community Hub thread
+(Oct 2023) reported that IPs in `40.77.202.0/24` specifically didn't
+reverse-resolve as documented; testing an IP from that exact prefix today
+showed it resolving fine, so either it's been fixed since or was a
+narrower/transient issue - not a systemic gap worth an `allow_forward_
+failure` policy the way Baidu needed. Since Bing already has a working,
+actively-used official static IP list, FCrDNS here is a supplementary/
+fallback check (catches a UA claiming Bingbot from an IP the static list
+hasn't caught up on yet, and - the part the static list can't do at all -
+lets a confirmed-spoof check run), not a gap-filler like it is for Baidu.
+
+**Facebook/Meta: checked, and it's a real negative finding - Meta does not
+officially recommend FCrDNS at all.** Fetched Meta's two current official
+pages directly (`developers.facebook.com/docs/sharing/webmasters/crawler/`
+and `developers.facebook.com/documentation/sharing/webmasters/web-
+crawlers`) rather than trust aggregated/third-party summaries (which - same
+lesson as Amazonbot - confidently asserted a `*.fb.com`/`*.facebook.com`
+reverse-DNS pattern that appears nowhere in Meta's actual pages). Neither
+official page mentions reverse DNS, PTR records, or hostname verification
+at all. The only guidance given, verbatim: "Add to your allow list either
+the user agent strings or the IP addresses used by the crawler." Neither
+page publishes actual IP ranges either - the lists floating around online
+(GitHub gists, third-party blogs) are unofficial, same category of risk as
+the Amazonbot list that turned out to be wrong. **Don't add a Facebook/Meta
+verify_fcrdns entry based on a third-party-claimed hostname pattern** -
+there is no official pattern to validate against, and unlike Yahoo/Amazonbot
+(where an official pattern exists but real example IPs are hard to find),
+here the "official pattern" itself would have to be invented from
+unofficial sources first.
+
 ## Testing conventions
 
 - `fcrdns` package tests use a fake `Resolver` (function fields), never real
@@ -234,7 +276,10 @@ of source isn't likely to either.
   non-historical) source of example IPs before they can be validated at all
   - guessing from IP ranges circulating online didn't work for either (see
   above).
+- Facebook/Meta isn't addable at all right now, not just unvalidated - see
+  above; there's no official pattern to implement against, unlike Yahoo/
+  Amazonbot where the gap is just finding real example IPs.
 - Wired into `../containers/hyurservice/caddy/Dockerfile` and its Caddyfile
-  on the `caddy-fcrdns-integration` branch of that repo - not yet merged to
-  its `master`.
+  on the `caddy-fcrdns-integration` branch of that repo (Baidu and Bing) -
+  not yet merged to its `master`.
 - No CI configured.

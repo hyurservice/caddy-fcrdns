@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/fatih/color"
 	"github.com/hyurservice/caddy-fcrdns/fcrdns"
 	"github.com/olekukonko/tablewriter"
 )
@@ -21,6 +22,25 @@ const (
 	maxCacheListLimit     = 1000
 	maxTableColumnWidth   = 40
 )
+
+// tableYellow/tableRed highlight non-verified outcomes in the table format.
+// EnableColor() forces ANSI codes on regardless of fatih/color's
+// auto-detected NoColor: that detection is based on whether *this Caddy
+// process's* os.Stdout is a terminal, which has nothing to do with whether
+// the HTTP client requesting format=table is a human at a terminal - so
+// left alone, it would silently strip colors whenever Caddy runs under
+// systemd/docker (i.e. almost always in production), regardless of what the
+// curl caller actually wants.
+var (
+	tableYellow = newTableColor(color.FgYellow)
+	tableRed    = newTableColor(color.FgRed)
+)
+
+func newTableColor(attrs ...color.Attribute) *color.Color {
+	c := color.New(attrs...)
+	c.EnableColor()
+	return c
+}
 
 // AdminAPI exposes the shared verify_fcrdns cache's contents over Caddy's
 // admin API - GET /verify_fcrdns/cache?limit=N&format=json|table - for live
@@ -151,7 +171,6 @@ func writeCacheListJSON(w http.ResponseWriter, total int, entries []fcrdns.Index
 
 func writeCacheListTable(w http.ResponseWriter, total int, entries []fcrdns.IndexEntry) error {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "showing %d of %d entries\n\n", len(entries), total)
 
 	tw := tablewriter.NewWriter(w)
 	tw.Header("IP", "PATTERN", "POLICY", "OUTCOME", "HOSTNAME", "FWD", "HITS", "EXPIRES", "ERROR")
@@ -160,15 +179,45 @@ func writeCacheListTable(w http.ResponseWriter, total int, entries []fcrdns.Inde
 			e.IP,
 			e.HostnamePattern,
 			e.ForwardPolicy,
-			e.Outcome.String(),
+			colorizeOutcome(e.Outcome),
 			truncate(dashIfEmpty(e.MatchedHostname), maxTableColumnWidth),
 			yesNo(e.ForwardChecked),
 			strconv.FormatUint(e.Hits, 10),
 			expiresIn(e.ExpiresAt),
-			truncate(dashIfEmpty(errString(e.Err)), maxTableColumnWidth),
+			colorizeError(e.Err),
 		)
 	}
-	return tw.Render()
+	if err := tw.Render(); err != nil {
+		return err
+	}
+
+	_, err := fmt.Fprintf(w, "\nshowing %d of %d entries\n", len(entries), total)
+	return err
+}
+
+// colorizeOutcome highlights non-verified outcomes so they stand out in a
+// terminal: rejected (a confirmed mismatch) in yellow, unknown (inconclusive
+// - DNS timeout/error) in red, matching the error column's color since
+// they're usually the same underlying condition.
+func colorizeOutcome(o fcrdns.Outcome) string {
+	switch o {
+	case fcrdns.OutcomeRejected:
+		return tableYellow.Sprint(o.String())
+	case fcrdns.OutcomeUnknown:
+		return tableRed.Sprint(o.String())
+	default:
+		return o.String()
+	}
+}
+
+// colorizeError truncates and colors err's message in red, or returns "-"
+// if there's no error. Truncation happens before coloring, not after, so it
+// can never cut through the middle of an ANSI escape sequence.
+func colorizeError(err error) string {
+	if err == nil {
+		return "-"
+	}
+	return tableRed.Sprint(truncate(err.Error(), maxTableColumnWidth))
 }
 
 func dashIfEmpty(s string) string {
@@ -176,13 +225,6 @@ func dashIfEmpty(s string) string {
 		return "-"
 	}
 	return s
-}
-
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 func yesNo(b bool) string {

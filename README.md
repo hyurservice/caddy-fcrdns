@@ -187,6 +187,25 @@ Add `&format=table` for a human-readable rendering instead:
 curl 'http://localhost:2019/verify_fcrdns/cache?limit=5&format=table'
 ```
 
+```
+┌─────────────────┬──────────────────────┬─────────────────────────┬──────────┬──────────────────────────────────────────┬─────┬──────┬─────────┬────────────────────────────────────┐
+│       IP        │       PATTERN        │         POLICY          │ OUTCOME  │                 HOSTNAME                 │ FWD │ HITS │ EXPIRES │               ERROR                │
+├─────────────────┼──────────────────────┼─────────────────────────┼──────────┼──────────────────────────────────────────┼─────┼──────┼─────────┼────────────────────────────────────┤
+│ 66.249.66.1     │ \.googlebot\.com$    │ require_forward_confirm │ verified │ crawl-66-249-66-1.googlebot.com.         │ yes │ 1842 │ 24h0m0s │ -                                  │
+│ 220.181.108.108 │ \.crawl\.baidu\.com$ │ allow_forward_failure   │ verified │ baiduspider-220-181-108-108.crawl.bai... │ no  │ 903  │ 24h0m0s │ -                                  │
+│ 198.51.100.7    │ \.crawl\.baidu\.com$ │ allow_forward_failure   │ rejected │ -                                        │ no  │ 210  │ 1h0m0s  │ -                                  │
+│ 203.0.113.42    │ \.crawl\.baidu\.com$ │ allow_forward_failure   │ unknown  │ -                                        │ no  │ 47   │ 1m0s    │ lookup : context deadline exceeded │
+└─────────────────┴──────────────────────┴─────────────────────────┴──────────┴──────────────────────────────────────────┴─────┴──────┴─────────┴────────────────────────────────────┘
+
+showing 4 of 4 entries
+```
+
+In an actual terminal, `rejected` renders in yellow and `unknown` (plus its
+`ERROR` text) in red, so a confirmed mismatch and an inconclusive DNS result
+stand out from `verified` at a glance - colors are forced on regardless of
+whether Caddy's own process is attached to a terminal, since that has no
+bearing on whether the `curl` caller viewing this wants color.
+
 `limit` defaults to 20 and is capped at 1000 server-side; `total_entries`
 always reflects the full cache regardless of `limit`, so you can tell "am I
 seeing everything, or just the top few". `hits` counts every `Verify` call

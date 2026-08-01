@@ -95,13 +95,25 @@ func handleCacheList(w http.ResponseWriter, r *http.Request) error {
 		limit = maxCacheListLimit
 	}
 
+	colorsEnabled := true
+	if s := r.URL.Query().Get("colors"); s != "" {
+		switch s {
+		case "yes":
+			colorsEnabled = true
+		case "no":
+			colorsEnabled = false
+		default:
+			return caddy.APIError{HTTPStatus: http.StatusBadRequest, Err: fmt.Errorf("invalid colors %q: must be yes or no", s)}
+		}
+	}
+
 	total, entries := app.Top(limit)
 
 	switch format := r.URL.Query().Get("format"); format {
 	case "", "json":
 		return writeCacheListJSON(w, total, entries)
 	case "table":
-		return writeCacheListTable(w, total, entries)
+		return writeCacheListTable(w, total, entries, colorsEnabled)
 	default:
 		return caddy.APIError{HTTPStatus: http.StatusBadRequest, Err: fmt.Errorf("invalid format %q: must be json or table", format)}
 	}
@@ -169,7 +181,7 @@ func writeCacheListJSON(w http.ResponseWriter, total int, entries []fcrdns.Index
 	return json.NewEncoder(w).Encode(out)
 }
 
-func writeCacheListTable(w http.ResponseWriter, total int, entries []fcrdns.IndexEntry) error {
+func writeCacheListTable(w http.ResponseWriter, total int, entries []fcrdns.IndexEntry, colorsEnabled bool) error {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 	tw := tablewriter.NewWriter(w)
@@ -179,12 +191,12 @@ func writeCacheListTable(w http.ResponseWriter, total int, entries []fcrdns.Inde
 			e.IP,
 			e.HostnamePattern,
 			e.ForwardPolicy,
-			colorizeOutcome(e.Outcome),
+			colorizeOutcome(e.Outcome, colorsEnabled),
 			truncate(dashIfEmpty(e.MatchedHostname), maxTableColumnWidth),
 			yesNo(e.ForwardChecked),
 			strconv.FormatUint(e.Hits, 10),
 			expiresIn(e.ExpiresAt),
-			colorizeError(e.Err),
+			colorizeError(e.Err, colorsEnabled),
 		)
 	}
 	if err := tw.Render(); err != nil {
@@ -198,8 +210,14 @@ func writeCacheListTable(w http.ResponseWriter, total int, entries []fcrdns.Inde
 // colorizeOutcome highlights non-verified outcomes so they stand out in a
 // terminal: rejected (a confirmed mismatch) in yellow, unknown (inconclusive
 // - DNS timeout/error) in red, matching the error column's color since
-// they're usually the same underlying condition.
-func colorizeOutcome(o fcrdns.Outcome) string {
+// they're usually the same underlying condition. If colorsEnabled is false
+// (?colors=no), returns the plain string instead - a dumb terminal or a
+// script parsing this output would otherwise see raw ANSI escape bytes
+// rather than an absence of color.
+func colorizeOutcome(o fcrdns.Outcome, colorsEnabled bool) string {
+	if !colorsEnabled {
+		return o.String()
+	}
 	switch o {
 	case fcrdns.OutcomeRejected:
 		return tableYellow.Sprint(o.String())
@@ -210,14 +228,19 @@ func colorizeOutcome(o fcrdns.Outcome) string {
 	}
 }
 
-// colorizeError truncates and colors err's message in red, or returns "-"
-// if there's no error. Truncation happens before coloring, not after, so it
-// can never cut through the middle of an ANSI escape sequence.
-func colorizeError(err error) string {
+// colorizeError truncates and, if colorsEnabled, colors err's message in
+// red; returns "-" if there's no error. Truncation happens before coloring,
+// not after, so it can never cut through the middle of an ANSI escape
+// sequence.
+func colorizeError(err error, colorsEnabled bool) string {
 	if err == nil {
 		return "-"
 	}
-	return tableRed.Sprint(truncate(err.Error(), maxTableColumnWidth))
+	text := truncate(err.Error(), maxTableColumnWidth)
+	if !colorsEnabled {
+		return text
+	}
+	return tableRed.Sprint(text)
 }
 
 func dashIfEmpty(s string) string {

@@ -93,6 +93,7 @@ func TestHandleCacheList_InvalidLimitAndFormat(t *testing.T) {
 		"/verify_fcrdns/cache?limit=-1",
 		"/verify_fcrdns/cache?limit=notanumber",
 		"/verify_fcrdns/cache?format=xml",
+		"/verify_fcrdns/cache?colors=maybe",
 	}
 	for _, target := range targets {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -210,5 +211,40 @@ func TestHandleCacheList_TableFormat(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("table output missing %q; got:\n%s", want, body)
 		}
+	}
+}
+
+func TestHandleCacheList_TableColors(t *testing.T) {
+	// A PTR name that doesn't match the pattern, so the outcome is
+	// "rejected" - the case colorizeOutcome actually colors, unlike the
+	// "verified" entries populateEntries produces.
+	app := newTestApp(t, fakeResolver{names: []string{"not-a-match.example.com."}})
+	pattern := mustPattern(t, `\.crawl\.baidu\.com$`)
+	app.cache.Verify(context.Background(), "1.2.3.1", pattern, fcrdns.AllowForwardFailure)
+
+	const ansiPrefix = "\x1b["
+
+	req := httptest.NewRequest(http.MethodGet, "/verify_fcrdns/cache?format=table", nil)
+	rec := httptest.NewRecorder()
+	if err := handleCacheList(rec, req); err != nil {
+		t.Fatalf("handleCacheList: %v", err)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, ansiPrefix) {
+		t.Errorf("default (colors enabled) table output has no ANSI escape codes; got:\n%s", body)
+	} else if !strings.Contains(body, "rejected") {
+		t.Errorf("table output missing %q; got:\n%s", "rejected", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/verify_fcrdns/cache?format=table&colors=no", nil)
+	rec = httptest.NewRecorder()
+	if err := handleCacheList(rec, req); err != nil {
+		t.Fatalf("handleCacheList: %v", err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, ansiPrefix) {
+		t.Errorf("colors=no table output still has ANSI escape codes; got:\n%s", body)
+	}
+	if !strings.Contains(body, "rejected") {
+		t.Errorf("colors=no table output missing plain %q; got:\n%s", "rejected", body)
 	}
 }

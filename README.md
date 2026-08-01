@@ -204,7 +204,10 @@ In an actual terminal, `rejected` renders in yellow and `unknown` (plus its
 `ERROR` text) in red, so a confirmed mismatch and an inconclusive DNS result
 stand out from `verified` at a glance - colors are forced on regardless of
 whether Caddy's own process is attached to a terminal, since that has no
-bearing on whether the `curl` caller viewing this wants color.
+bearing on whether the `curl` caller viewing this wants color. Pass
+`&colors=no` to get plain text instead (e.g. for a client/terminal that
+doesn't interpret ANSI codes, which would otherwise show the raw escape
+bytes rather than an absence of color).
 
 `limit` defaults to 20 and is capped at 1000 server-side; `total_entries`
 always reflects the full cache regardless of `limit`, so you can tell "am I

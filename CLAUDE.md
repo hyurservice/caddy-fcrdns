@@ -276,6 +276,39 @@ here (e.g. `157.240.0.0/16`, `173.252.64.0/19`, `129.134.0.0/17`,
 `2a03:2880::/32`) - unlike the Amazonbot community list, which turned out
 to be bogus, this one holds up under spot-checking against real WHOIS data.
 
+**Yandex: officially documented, validated live, and actually implemented
+- but with a narrower hostname pattern than the docs literally state.**
+Yandex's own page (`yandex.com/support/webmaster/en/robot-workings/check-
+yandex-robots`) states the method explicitly: "All Yandex robots have names
+ending in yandex.ru, yandex.net or yandex.com," forward-confirmed, and
+recommends it *over* IP-based allowlisting specifically because "Bots use
+an offline network: AS13238, AS208722 and AS212066... their list is not
+disclosed" and changes frequently - same situation as Baidu (FCrDNS is the
+only official method, not a supplement to a maintained static list).
+
+Guessing the network address (`.1`) inside the project's existing
+community-sourced YandexBot CIDR blocks (`../containers/hyurservice/caddy/
+ip-blocklists/allowed-ips.caddy`, via `sefinek/trusted-ips-whitelist`) mostly
+produced NXDOMAIN or resolved to hostnames that are real Yandex domains but
+don't look crawler-specific - `213.180.192.1` -> `sas-1lb19b-kni0.yndx.net`,
+`77.88.0.1` -> `s257klg.storage.yandex.net`. Same lesson as Yahoo: a `.1`
+address in a broad company CIDR block is usually just infrastructure, not
+the crawler. A real reported crawler IP instead: `5.45.207.124` and
+`5.45.207.1` both reverse-resolve to `5-45-207-124.spider.yandex.com` /
+`5-45-207-1.spider.yandex.com` and forward-confirm cleanly - no Baidu-style
+gap.
+
+The hostname_pattern actually configured is `\.spider\.yandex\.com$`, not
+the broader `\.yandex\.(ru|net|com)$` the official docs describe - real
+crawler traffic specifically lives under a `spider.` subdomain, distinct
+from `yndx.net`/`storage.yandex.net` company infrastructure that also
+technically matches the docs' broader suffix. Trusting the wider pattern
+would risk treating non-crawler Yandex traffic as a verified bot. Only the
+`.com` variant is configured since that's the only one actually observed -
+`spider.yandex.ru`/`spider.yandex.net` haven't been validated against real
+IPs, so don't assume they exist or follow the same convention without
+checking first.
+
 ## Testing conventions
 
 - `fcrdns` package tests use a fake `Resolver` (function fields), never real
@@ -310,6 +343,6 @@ to be bogus, this one holds up under spot-checking against real WHOIS data.
   above; there's no official pattern to implement against, unlike Yahoo/
   Amazonbot where the gap is just finding real example IPs.
 - Wired into `../containers/hyurservice/caddy/Dockerfile` and its Caddyfile
-  on the `caddy-fcrdns-integration` branch of that repo (Baidu and Bing) -
-  not yet merged to its `master`.
+  on the `caddy-fcrdns-integration` branch of that repo (Baidu, Bing, and
+  Yandex) - not yet merged to its `master`.
 - No CI configured.

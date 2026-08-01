@@ -214,13 +214,8 @@ every currently-cached entry. `total_entries` always reflects the full cache
 regardless of `limit`, so you can tell "am I seeing everything, or just the
 top few". `hits` counts every `Verify` call for that key - cache hits and
 fresh lookups alike, including concurrent requests deduplicated against an
-in-flight lookup - not just cache hits.
-
-This is a read-only debugging view: Ristretto (the underlying cache) has no
-enumeration API by design, so this endpoint is backed by a separate
-lightweight index that mirrors the cache's contents via its eviction/
-rejection callbacks (see `fcrdns/index.go`) - nothing on the actual
-`Verify` path reads from it.
+in-flight lookup - not just cache hits. This is a read-only view; nothing on
+the actual `Verify` path reads from it.
 
 ## Logging
 

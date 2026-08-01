@@ -26,9 +26,10 @@ assume the two repos are wired together unless you've checked.
   against this hostname pattern" primitive, reusable outside Caddy entirely
   (e.g. verifying a webhook sender, or SMTP anti-spam - FCrDNS is a generic
   technique, not crawler-specific).
-- `app.go` / `matcher.go` / `caddyfile.go` (root package `caddyfcrdns`) are
-  the *only* place Caddy-specific concerns belong: request handling, the
-  User-Agent pre-filter, Caddyfile syntax, logging.
+- `app.go` / `matcher.go` / `caddyfile.go` / `adminapi.go` (root package
+  `caddyfcrdns`) are the *only* place Caddy-specific concerns belong: request
+  handling, the User-Agent pre-filter, Caddyfile syntax, logging, the admin
+  API.
 - **Deliberately not in the module at all**: which crawlers to check, and
   their User-Agent strings. That's expressed in the *caller's* Caddyfile via
   the built-in `header_regexp` matcher, combined with `verify_fcrdns` in the
@@ -74,6 +75,71 @@ confirmed spoof" section for the actual Caddyfile pattern.
   singleflight-deduplicated batch that misses the cache, not just the one
   that actually performed the lookup - see the doc comment on `Cache.Verify`
   before changing this; it's intentional, not a bug to "fix."
+
+## Admin API design gotchas (`fcrdns/index.go`, `adminapi.go`)
+
+`GET /verify_fcrdns/cache` (see README.md "Admin API") lists the cache's
+contents ranked by hit count, for live debugging. Getting this right
+surfaced several non-obvious Ristretto/Caddy/singleflight interactions:
+
+- **Ristretto has no enumeration API, by design** - it's built purely for
+  O(1) get/set/del throughput, not for "what's currently in here." The side
+  index in `fcrdns/index.go` exists solely to answer that question; nothing
+  on `Cache.Verify`'s actual path reads from it.
+- **`OnEvict`/`OnReject` only expose the *hashed* `uint64` key on `Item`, not
+  the original string key** you passed to `Set`. That's why `cachedResult`
+  (the value Ristretto stores) carries its own `key` field - it's the only
+  way those callbacks can tell the index which entry to forget.
+- **`index.observe` must run *before* `store.SetWithTTL`/`Wait`, not after -
+  ordering that looks backwards at first glance.** Ristretto's admission
+  policy can reject a fresh `Set` (rare, but real under memory pressure), and
+  `OnReject` fires *synchronously inside `Wait()`* - confirmed by reading
+  `processItems` in ristretto's own `cache.go`: `Wait()` enqueues a marker
+  onto the same single-consumer channel `Set` used, so by the time `Wait()`
+  returns, any rejection for the item enqueued just before it has already
+  been processed, in FIFO order, on that same goroutine. If `observe` ran
+  *after* `SetWithTTL`/`Wait` instead, a rejected item's `OnReject` would fire
+  and find nothing to remove (the index entry wouldn't exist yet), then
+  `observe` would add a phantom entry immediately afterward that nothing
+  would ever clean up. Running `observe` first means a same-key `OnReject`
+  correctly removes what was just optimistically added.
+- **`singleflight.Do` returns the *identical* result value to every
+  deduplicated caller**, including the `fresh`/leader-vs-waiter distinction -
+  there is no way to tell, from inside the shared closure or its result,
+  "was I the goroutine that actually ran this, or one that waited for it."
+  Concretely: incrementing a hit counter *inside* the `group.Do` closure only
+  counts the leader once, no matter how many goroutines were deduplicated
+  alongside it. `Cache.Verify` resolves this with a single `defer
+  c.index.hit(key)` at the top of the function, outside `group.Do` entirely -
+  it fires exactly once per external call regardless of which branch (early
+  cache hit, fresh lookup, or deduplicated wait) was taken. Don't move hit
+  counting back inside the closure or split it across branches; both are easy
+  ways to reintroduce double- or under-counting. `TestCache_Top_ConcurrentDedupedCallsAllCount`
+  is the regression test for this specifically.
+- **Ristretto's cleanup ticker sweeps expired entries in 5-second buckets**
+  (`bucketDurationSecs` in its own `ttl.go`, not exposed via `Config`), ticked
+  every `TtlTickerDurationInSec/2` (2.5s default) - so an entry with a very
+  short TTL can take close to 10s of wall-clock time to actually trigger
+  `OnEvict` and disappear from the index, even though `Get` already stops
+  returning it immediately via its own independent expiration check. This
+  cost a flaky-looking test failure once (`TestCache_Top_TTLExpiryRemovesEntry`
+  originally polled for only 3s) - give tests around this generous margin
+  (15s+), not a tight bound, and don't read a few seconds of "the index still
+  shows an already-expired entry" as a bug to fix.
+- **Admin API modules (`admin.api.*`) are provisioned *before* regular apps
+  during config load** - confirmed by reading caddy's own `caddy.go`:
+  `provisionContext` calls `replaceLocalAdminServer` (which provisions every
+  registered `admin.api.*` module, including this one) strictly before the
+  loop that calls `ctx.App(appName)` for each app in the config. This means
+  `AdminAPI.Provision` cannot use `ctx.App("verify_fcrdns")` the way
+  `matcher.go` does - at that point in startup, the real app isn't loaded
+  yet, so `ctx.App` would silently instantiate a brand-new, separately-
+  configured `App` with its own disconnected cache instead of erroring.
+  Fixed via `currentApp` (`atomic.Pointer[App]` in `app.go`), set at the end
+  of `App.Provision` and cleared (via `CompareAndSwap`, so a reload's new
+  instance can't be clobbered by the old instance's later `Stop`) in
+  `App.Stop`. `adminapi.go`'s handler reads it lazily at *request* time,
+  long after startup ordering stops mattering.
 
 ## Policy defaults
 
@@ -168,6 +234,7 @@ of source isn't likely to either.
   non-historical) source of example IPs before they can be validated at all
   - guessing from IP ranges circulating online didn't work for either (see
   above).
-- Not wired into `../containers/hyurservice/caddy/Dockerfile` or its
-  Caddyfile yet.
+- Wired into `../containers/hyurservice/caddy/Dockerfile` and its Caddyfile
+  on the `caddy-fcrdns-integration` branch of that repo - not yet merged to
+  its `master`.
 - No CI configured.

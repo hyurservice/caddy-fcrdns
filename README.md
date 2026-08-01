@@ -140,6 +140,65 @@ and the cache is bounded by estimated memory (`cache_max_bytes`), evicting
 via a cost-aware admission policy - relevant because this cache's keys are
 derived from request source IPs, which are attacker-influenceable.
 
+## Admin API
+
+While Caddy is running, `GET /verify_fcrdns/cache` on the [admin
+API](https://caddyserver.com/docs/api) lists the shared cache's contents -
+similar in spirit to CrowdSec's `cscli decisions list` - ordered by
+descending hit count, so you can see at a glance which IPs/patterns are
+actually being checked repeatedly:
+
+```shell
+curl 'http://localhost:2019/verify_fcrdns/cache?limit=5'
+```
+
+```json
+{
+  "total_entries": 4821,
+  "returned": 2,
+  "entries": [
+    {
+      "ip": "66.249.66.1",
+      "hostname_pattern": "\\.googlebot\\.com$",
+      "forward_policy": "require_forward_confirm",
+      "outcome": "verified",
+      "matched_hostname": "crawl-66-249-66-1.googlebot.com",
+      "forward_checked": true,
+      "hits": 1842,
+      "expires_in": "18h32m10s"
+    },
+    {
+      "ip": "203.0.113.42",
+      "hostname_pattern": "\\.crawl\\.baidu\\.com$",
+      "forward_policy": "allow_forward_failure",
+      "outcome": "unknown",
+      "forward_checked": false,
+      "error": "context deadline exceeded",
+      "hits": 47,
+      "expires_in": "38s"
+    }
+  ]
+}
+```
+
+Add `&format=table` for a human-readable rendering instead:
+
+```shell
+curl 'http://localhost:2019/verify_fcrdns/cache?limit=5&format=table'
+```
+
+`limit` defaults to 20 and is capped at 1000 server-side; `total_entries`
+always reflects the full cache regardless of `limit`, so you can tell "am I
+seeing everything, or just the top few". `hits` counts every `Verify` call
+for that key - cache hits and fresh lookups alike, including concurrent
+requests deduplicated against an in-flight lookup - not just cache hits.
+
+This is a read-only debugging view: Ristretto (the underlying cache) has no
+enumeration API by design, so this endpoint is backed by a separate
+lightweight index that mirrors the cache's contents via its eviction/
+rejection callbacks (see `fcrdns/index.go`) - nothing on the actual
+`Verify` path reads from it.
+
 ## Logging
 
 Provisioning logs the resolved configuration at `info` level. Each
@@ -152,12 +211,15 @@ request that passes the User-Agent pre-filter.
 
 ## Package layout
 
-- `fcrdns/` - the actual FCrDNS verification logic and its cache. Pure Go,
-  no dependency on Caddy, HTTP, User-Agents, or crawlers - a general-purpose
-  verification primitive usable outside Caddy entirely.
+- `fcrdns/` - the actual FCrDNS verification logic, its cache, and the
+  cache's observability index (`index.go`). Pure Go, no dependency on
+  Caddy, HTTP, User-Agents, or crawlers - a general-purpose verification
+  primitive usable outside Caddy entirely.
 - `app.go`, `matcher.go`, `caddyfile.go` - the Caddy-specific glue: the
   global app (shared cache/config), the HTTP request matcher, and Caddyfile
   parsing for both.
+- `adminapi.go` - the `GET /verify_fcrdns/cache` admin API endpoint (see
+  [Admin API](#admin-api)).
 
 ## Development
 

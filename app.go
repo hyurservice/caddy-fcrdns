@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -20,6 +21,19 @@ import (
 func init() {
 	caddy.RegisterModule(App{})
 }
+
+// currentApp holds the most recently provisioned App, so the admin API
+// (adminapi.go) can reach the shared cache without going through
+// ctx.App("verify_fcrdns"). That would look like the obvious way to do it -
+// it's exactly what matcher.go does - but doesn't work for an admin.api.*
+// module: Caddy provisions admin API routes (replaceLocalAdminServer)
+// before it loads the config's regular apps (see provisionContext in
+// caddy's own caddy.go), so at the point an admin.api module's Provision
+// runs, ctx.App would find nothing yet configured and silently instantiate
+// a brand new, separately-configured App rather than returning the real
+// shared one. Reading this pointer lazily at request time sidesteps the
+// ordering problem entirely.
+var currentApp atomic.Pointer[App]
 
 // App holds configuration shared by every verify_fcrdns matcher instance:
 // the DNS resolver, per-lookup timeout, and result cache. Configure exactly
@@ -97,6 +111,8 @@ func (a *App) Provision(ctx caddy.Context) error {
 		zap.Duration("dns_timeout", a.dnsTimeout),
 	)
 
+	currentApp.Store(a)
+
 	return nil
 }
 
@@ -109,6 +125,10 @@ func (a *App) Stop() error {
 	if a.cache != nil {
 		a.cache.Close()
 	}
+	// Only clear currentApp if it's still us - on a config reload, the
+	// replacement App's Provision may already have stored itself before
+	// the old one's Stop runs, and we must not clobber that.
+	currentApp.CompareAndSwap(a, nil)
 	return nil
 }
 
@@ -120,6 +140,14 @@ func (a *App) Verify(ip string, hostnamePattern *regexp.Regexp, forwardPolicy fc
 	ctx, cancel := context.WithTimeout(context.Background(), a.dnsTimeout)
 	defer cancel()
 	return a.cache.Verify(ctx, ip, hostnamePattern, forwardPolicy)
+}
+
+// Top returns up to limit currently-cached entries ordered by descending
+// hit count, and the total number of entries tracked - see
+// fcrdns.Cache.Top. Used by the admin API (adminapi.go), not by the
+// matcher.
+func (a *App) Top(limit int) (total int, entries []fcrdns.IndexEntry) {
+	return a.cache.Top(limit)
 }
 
 // parseDurationOrDefault parses s as a duration, returning def if s is empty.

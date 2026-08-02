@@ -21,11 +21,19 @@ stronger signal than an unverified one; etc).
 
 ## Installation
 
-Build with [xcaddy](https://github.com/caddyserver/xcaddy):
+Build with [xcaddy](https://github.com/caddyserver/xcaddy), pinned to a
+[tagged release](https://github.com/hyurservice/caddy-fcrdns/tags) rather
+than left unversioned:
 
 ```shell
-xcaddy build --with github.com/hyurservice/caddy-fcrdns
+xcaddy build --with github.com/hyurservice/caddy-fcrdns@v0.1.0
 ```
+
+An unversioned `--with` resolves "latest" through Go's module proxy on
+every build, which can lag behind a just-pushed commit for a while - and
+in a Docker build, a floating version string also gives the build-layer
+cache no signal that a rebuild should actually pick up a new release.
+Pinning avoids both.
 
 ## Usage
 

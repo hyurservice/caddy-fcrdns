@@ -31,27 +31,128 @@ assume the two repos are wired together unless you've checked.
   handling, the User-Agent pre-filter, Caddyfile syntax, logging, the admin
   API.
 - **Deliberately not in the module at all**: which crawlers to check, and
-  their User-Agent strings. That's expressed in the *caller's* Caddyfile via
-  the built-in `header_regexp` matcher, combined with `verify_fcrdns` in the
-  same named matcher block. This works because Caddy's `MatcherSet.Match`
-  (in caddy's own `modules/caddyhttp/routes.go`) short-circuits on the first
-  failing matcher in the set - confirmed by reading Caddy's source, not
-  assumed - so a cheap `header_regexp` placed before `verify_fcrdns` means
-  the DNS check only runs for requests actually claiming to be that crawler.
-  Do not add User-Agent awareness to this module; if a future need seems to
-  require it, that's a sign the matcher composition is being done wrong at
-  the call site, not a gap in this module.
+  their User-Agent strings. That's expressed in the *caller's* Caddyfile,
+  composed with a cheap `header_regexp` pre-filter via `expression`/CEL's
+  `&&` (**not** by putting both in the same named matcher block - see
+  "The matcher-set ordering bug" below; an earlier version of this note
+  claimed the latter was safe, and it was wrong). Do not add User-Agent
+  awareness to this module; if a future need seems to require it, that's a
+  sign the matcher composition is being done wrong at the call site, not a
+  gap in this module.
+
+## The matcher-set ordering bug (found live in production, 2026-08-01)
+
+**Caddy does not guarantee that conditions within a single `@name { }`
+matcher block evaluate in the order they're written**, when that block
+combines more than one matcher *type* (e.g. `header_regexp` +
+`verify_fcrdns`). This was the original, incorrect assumption this module's
+whole "compose a UA pre-filter with verify_fcrdns" design rested on - it was
+live in `../containers/hyurservice`'s Caddyfile and caused every distinct
+visitor IP to trigger DNS lookups against Baidu/Bing/Yandex's patterns
+*regardless of User-Agent*, silently defeating the entire point of the
+pre-filter.
+
+**Root cause**, traced through `caddyserver/caddy/v2@v2.11.4`'s own source,
+not assumed:
+- A named matcher block combining multiple matcher types compiles to one
+  JSON object keyed by matcher name (e.g.
+  `{"header_regexp": {...}, "verify_fcrdns": {...}}`).
+- Loading that at config-provision time goes through
+  `Context.loadModuleMap` (`context.go`), which returns a **`map[string]any`**.
+- `MatcherSets.FromInterface` (`modules/caddyhttp/routes.go`) then builds
+  the final ordered `MatcherSet []any` slice via `for _, matcher := range
+  matcherSetIfaces` - iterating that map. **Go map iteration order is
+  intentionally randomized by the runtime.** `MatchNot`'s own `Provision`
+  (used by the Caddyfile `not { }` block) has the identical pattern, so
+  wrapping in `not { }` doesn't help either - it's not a workaround.
+- `MatcherSet.Match`/`MatchWithError` genuinely do short-circuit on the
+  first *failing* matcher, in whatever order ended up in the slice - that
+  part of the original assumption was correct. But which matcher lands
+  first is decided arbitrarily, once, at each config load/reload - not by
+  Caddyfile source order. If `verify_fcrdns` happens to land first, it runs
+  unconditionally, before `header_regexp` ever gets a chance to short-circuit
+  it.
+- Confirmed empirically, not just via source reading: replayed real
+  production requests (genuine Android Chrome UAs, no crawler keyword
+  anywhere in them) against a local instance running the real
+  `(allowed_crawlers)` Caddyfile snippet, and a `verify_fcrdns` cache entry
+  was created anyway. A plain `curl/8.5.0` UA reproduced it too.
+
+**The fix**: don't combine matcher types in one `@name { }` block for this
+purpose. Two options were considered:
+1. Nested `handle` blocks (nest the DNS check inside a `handle
+   @cheap_ua_matcher { }`) - the *outer* route/handle list, unlike a single
+   route's own matcher-set, genuinely is an ordered slice (routes get
+   appended one per `handle` directive in Caddyfile source order, not
+   loaded from a map) - this was the originally-proposed fix and would have
+   worked, at the cost of restructuring every call site's Caddyfile.
+2. **What was actually implemented**: give this module a `CELLibrary`
+   (`celmatcher.go`), so callers use `expression header_regexp(...) &&
+   verify_fcrdns(...)` instead. CEL's `&&` is guaranteed left-to-right
+   short-circuit by language spec, independent of Caddy's matcher-set
+   loading entirely. Chosen over (1) because it fixes the hazard at the
+   module level for every caller, not just this one Caddyfile, and doesn't
+   require restructuring existing route trees into nested handles.
+
+See README.md's usage section (marked with a prominent warning) for the
+correct, current Caddyfile pattern - **do not** re-introduce
+`@name { header_regexp ...; verify_fcrdns ... }` as a documented example
+even though it's shorter to write; it silently reverts to this bug.
 
 ## Distinguishing confirmed-rejection from unknown, without a third return value
 
-`Match()` returns a plain bool, but three outcomes exist internally
-(verified/rejected/unknown). Rather than exposing a side channel, the
-Caddyfile composes two calls with opposite `unknown_policy` and `not`:
-`accept_unknown` collapses verified-or-unknown to true, so `not (...)` is
+`Match()`/`MatchWithError()` return a plain bool (plus, now, an error - see
+"Adopting RequestMatcherWithError" below), but three outcomes exist
+internally (verified/rejected/unknown). Rather than exposing a side
+channel, callers compose two calls with opposite `unknown_policy` and CEL's
+`!`: `accept_unknown` collapses verified-or-unknown to true, so `!(...)` is
 true exactly on a confirmed mismatch. The second call is a cache hit, not a
 second lookup - see below for why that specifically requires excluding
 `unknown_policy` from the cache key. See README.md's "Distinguishing a
-confirmed spoof" section for the actual Caddyfile pattern.
+confirmed spoof" section for the actual pattern.
+
+## Adopting RequestMatcherWithError, and adding CELLibrary support
+
+`matcher.go`'s `Match` is now a thin wrapper around a real
+`MatchWithError(r) (bool, error)`, mirroring the convention Caddy's own
+core matchers use (they all implement both, with `Match` just discarding
+`MatchWithError`'s error - confirmed by reading `matchers.go`, e.g.
+`MatchQuery`/`MatchHeader`). This was motivated by, and is a prerequisite
+for, `celmatcher.go`'s `CELLibrary` implementation (`CELMatcherDecorator`
+prefers a `CELMatcherWithErrorFactory` over the deprecated
+`CELMatcherFactory`, which needs `RequestMatcherWithError`).
+
+The error is used narrowly: only for "no client IP available" (a genuine
+server misconfiguration, e.g. `trusted_proxies` not set up correctly) -
+**not** for any DNS outcome. A DNS timeout/failure is deliberately not a Go
+error; it's the `Unknown` outcome, resolved via `unknown_policy` like any
+other outcome. Surfacing it as an error instead would abort the request
+into Caddy's error-handling middleware chain regardless of
+`unknown_policy`, defeating the entire point of that setting. Don't expand
+what counts as an "error" here without re-checking this reasoning.
+
+`celmatcher.go`'s `CELLibrary` registers three overloads (1/2/3 string
+args, matching the Caddyfile matcher's own optional-arg shape), mirroring
+`MatchPathRE.CELLibrary`'s unnamed/named-pattern dual registration pattern
+extended to three arities. Each factory just constructs a `VerifyFCrDNS`
+and calls its normal `Provision(ctx)` - the same `ctx` the `CELLibrary`
+method itself received - so all the real provisioning logic (app lookup,
+regex compilation, policy parsing) is reused unchanged, not duplicated.
+
+One easy-to-get-wrong detail: `Provision` has a pointer receiver and
+mutates the matcher in place, so `return m, m.Provision(ctx)` as a single
+expression is riskier than it looks (evaluation order of the two return
+values isn't obviously guaranteed to run `Provision`'s mutation before `m`
+is copied for return). Followed `MatchPathRE`'s proven pattern instead:
+assign the error to a local first (`err := m.Provision(ctx)`), *then*
+`return m, err` as a separate statement.
+
+Validated the actual fix (not just that the code compiles) against a real
+xcaddy build: replayed the same non-crawler requests that revealed the bug
+against an `expression header_regexp(...) && verify_fcrdns(...)` matcher -
+confirmed the cache stayed empty for both a real captured Android Chrome UA
+and a plain `curl` UA, and only got an entry once a UA actually claiming
+`Baiduspider` was sent.
 
 ## Cache design gotchas
 
@@ -342,7 +443,12 @@ checking first.
 - Facebook/Meta isn't addable at all right now, not just unvalidated - see
   above; there's no official pattern to implement against, unlike Yahoo/
   Amazonbot where the gap is just finding real example IPs.
-- Wired into `../containers/hyurservice/caddy/Dockerfile` and its Caddyfile
-  on the `caddy-fcrdns-integration` branch of that repo (Baidu, Bing, and
-  Yandex) - not yet merged to its `master`.
+- Wired into `../containers/hyurservice/caddy/Dockerfile` and its Caddyfile,
+  merged to that repo's `master` (Baidu, Bing, and Yandex) - but that
+  Caddyfile's `(allowed_crawlers)` snippet still uses the buggy
+  `@name { header_regexp ...; verify_fcrdns ... }` pattern (see "The
+  matcher-set ordering bug" above) and is currently **disabled** in that
+  repo's live config while this fix lands. Needs to be rewritten to use
+  `expression` and re-enabled - not done yet as of this module's CEL
+  support landing.
 - No CI configured.

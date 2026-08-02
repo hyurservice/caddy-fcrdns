@@ -1,10 +1,15 @@
 package caddyfcrdns
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/hyurservice/caddy-fcrdns/fcrdns"
+	"go.uber.org/zap"
 )
 
 func TestParseForwardPolicy(t *testing.T) {
@@ -97,5 +102,59 @@ func TestUnmarshalCaddyfile_MissingHostnamePatternIsAnError(t *testing.T) {
 	var m VerifyFCrDNS
 	if err := m.UnmarshalCaddyfile(d); err == nil {
 		t.Error("expected an error when hostname_pattern is missing, got nil")
+	}
+}
+
+func TestMatchWithError_NoClientIPIsAnError(t *testing.T) {
+	app := newTestApp(t, fakeResolver{names: []string{"host.crawl.baidu.com."}})
+	m := VerifyFCrDNS{
+		HostnamePattern: `\.crawl\.baidu\.com$`,
+		hostnameRe:      mustPattern(t, `\.crawl\.baidu\.com$`),
+		forwardPolicy:   fcrdns.AllowForwardFailure,
+		app:             app,
+		logger:          zap.NewNop(),
+	}
+
+	// No VarsCtxKey in context at all, so GetVar(ClientIPVarKey) can't find
+	// an IP - matches what a real request looks like if trusted_proxies (or
+	// the vars middleware generally) isn't set up correctly.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	allowed, err := m.MatchWithError(req)
+	if err == nil {
+		t.Fatal("expected an error when no client IP is available, got nil")
+	}
+	if allowed {
+		t.Error("allowed = true, want false alongside the error")
+	}
+
+	// Match (the plain-bool wrapper) must not panic on this same input -
+	// it should just discard the error and report false.
+	if m.Match(req) {
+		t.Error("Match() = true, want false")
+	}
+}
+
+func TestMatchWithError_WithClientIP(t *testing.T) {
+	app := newTestApp(t, fakeResolver{names: []string{"host.crawl.baidu.com."}})
+	m := VerifyFCrDNS{
+		HostnamePattern: `\.crawl\.baidu\.com$`,
+		hostnameRe:      mustPattern(t, `\.crawl\.baidu\.com$`),
+		forwardPolicy:   fcrdns.AllowForwardFailure,
+		unknownPolicy:   fcrdns.RejectUnknown,
+		app:             app,
+		logger:          zap.NewNop(),
+	}
+
+	vars := map[string]any{caddyhttp.ClientIPVarKey: "1.2.3.4"}
+	ctx := context.WithValue(context.Background(), caddyhttp.VarsCtxKey, vars)
+	req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+
+	allowed, err := m.MatchWithError(req)
+	if err != nil {
+		t.Fatalf("MatchWithError: %v", err)
+	}
+	if !allowed {
+		t.Error("allowed = false, want true (fakeResolver's PTR name matches the pattern)")
 	}
 }

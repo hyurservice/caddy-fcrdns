@@ -46,13 +46,14 @@ Configure the shared cache/timeout settings once, globally:
 All of the above are optional; see [Global options](#global-options) for
 defaults. Then use the `verify_fcrdns` matcher, gated behind a cheap
 User-Agent pre-filter so the DNS check only runs for traffic actually
-claiming to be the crawler in question:
+claiming to be the crawler in question - via `expression`, combining both
+conditions with `&&`, **not** by putting `header_regexp` and `verify_fcrdns`
+in the same `@name { }` block (see the warning below for why that matters):
 
 ```caddyfile
 example.com {
     @googlebot_verified {
-        header_regexp User-Agent `(?i)googlebot`
-        verify_fcrdns `\.googlebot\.com$`
+        expression `header_regexp('User-Agent', '(?i)googlebot') && verify_fcrdns('\.googlebot\.com$')`
     }
 
     handle @googlebot_verified {
@@ -69,6 +70,26 @@ example.com {
 alternative when available - see the ["Why"](#why) section. Googlebot is
 used here purely as a widely-recognized illustration of the technique.)
 
+> [!WARNING]
+> **Don't write `@name { header_regexp ...; verify_fcrdns ... }`** (multiple
+> matcher *types* combined in one Caddyfile matcher block) expecting
+> `header_regexp` to always run first and short-circuit the DNS lookup for
+> non-matching traffic. Caddy loads a matcher block's conditions from a Go
+> map internally, and Go map iteration order is randomized - so which
+> condition runs first is decided arbitrarily once, at config load/reload
+> time, and can just as easily put `verify_fcrdns` first. When that happens,
+> *every* request triggers a DNS lookup regardless of User-Agent, not just
+> ones claiming to be the crawler - silently defeating the entire point of
+> the pre-filter. This isn't hypothetical: it was found in a real production
+> deployment, where two IPs whose requests never claimed to be a crawler at
+> all still showed up in the `verify_fcrdns` cache as rejected. `expression`
+> with CEL's `&&` doesn't have this problem - CEL guarantees left-to-right
+> short-circuit evaluation by language spec, unlike Caddy's matcher-set
+> loading. See CLAUDE.md for the full writeup, including how this was
+> diagnosed. (A bare `verify_fcrdns <pattern>` with nothing else in its
+> matcher block is unaffected either way - the hazard is specifically about
+> *combining* it with another matcher type for a pre-filter.)
+
 ### Distinguishing a confirmed spoof from an inconclusive check
 
 `verify_fcrdns` collapses to a single boolean, so by itself it can't tell you
@@ -77,12 +98,12 @@ the expected pattern, and a DNS lookup that merely timed out, both come back
 `false` if `unknown_policy` is `reject_unknown`. If you want to treat a
 confirmed spoof more aggressively (e.g. an outright `abort`) while treating
 an inconclusive lookup like ordinary unverified traffic, call the matcher
-twice with opposite `unknown_policy` values and compose with `not`:
+twice with opposite `unknown_policy` values and compose with `!` (again via
+`expression`, for the same short-circuit-ordering reason as above):
 
 ```caddyfile
 @googlebot_confirmed_spoof {
-    header_regexp User-Agent `(?i)googlebot`
-    not verify_fcrdns `\.googlebot\.com$` require_forward_confirm accept_unknown
+    expression `header_regexp('User-Agent', '(?i)googlebot') && !verify_fcrdns('\.googlebot\.com$', 'require_forward_confirm', 'accept_unknown')`
 }
 
 handle @googlebot_confirmed_spoof {
@@ -92,7 +113,7 @@ handle @googlebot_confirmed_spoof {
 
 With `accept_unknown`, the matcher returns `true` for both a confirmed pass
 *and* an inconclusive result - the only way it returns `false` is a
-confirmed mismatch. So `not (...)` is true precisely on a confirmed spoof.
+confirmed mismatch. So `!(...)` is true precisely on a confirmed spoof.
 The second call is a cache hit rather than a second DNS round-trip (see
 [Caching](#caching)).
 
@@ -110,6 +131,12 @@ verify_fcrdns <hostname_pattern> [<forward_policy>] [<unknown_policy>]
 
 Both policy arguments default to the stricter option, so
 `verify_fcrdns <hostname_pattern>` alone is a safe, complete matcher.
+
+`verify_fcrdns` is also usable from `expression` (CEL) matchers, as
+`verify_fcrdns(pattern)`, `verify_fcrdns(pattern, forward_policy)`, or
+`verify_fcrdns(pattern, forward_policy, unknown_policy)` - see the warning
+above for why this, not a combined `@name { header_regexp ...; verify_fcrdns
+... }` block, is the right way to pair it with a User-Agent pre-filter.
 
 `allow_forward_failure` exists because some real crawlers don't maintain a
 forward record for every dynamically-generated PTR hostname - confirmed

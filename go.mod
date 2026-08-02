@@ -6,6 +6,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.4
 	github.com/dgraph-io/ristretto v0.2.0
 	github.com/fatih/color v1.18.0
+	github.com/google/cel-go v0.28.1
 	github.com/olekukonko/tablewriter v1.1.4
 	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.22.0
@@ -51,7 +52,6 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/cel-go v0.28.1 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.15 // indirect

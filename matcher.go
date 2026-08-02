@@ -87,14 +87,27 @@ func (m *VerifyFCrDNS) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-// Match satisfies caddyhttp.RequestMatcher.
+// Match satisfies caddyhttp.RequestMatcher. It's a thin wrapper around
+// MatchWithError that discards the error, kept only so VerifyFCrDNS also
+// satisfies the plain RequestMatcher interface - MatchWithError is what
+// Caddy actually calls at runtime when both are implemented.
 func (m VerifyFCrDNS) Match(r *http.Request) bool {
+	match, _ := m.MatchWithError(r)
+	return match
+}
+
+// MatchWithError satisfies caddyhttp.RequestMatcherWithError. An error here
+// aborts the request into Caddy's error-handling middleware chain, so it's
+// used narrowly: only for "no client IP available," a genuine server
+// misconfiguration (e.g. trusted_proxies not set up correctly), not for any
+// DNS outcome. A DNS timeout/failure is deliberately NOT an error - it's
+// the Unknown outcome, resolved via unknown_policy like any other outcome;
+// surfacing it as a Go error instead would abort the request regardless of
+// unknown_policy, defeating the point of that setting.
+func (m VerifyFCrDNS) MatchWithError(r *http.Request) (bool, error) {
 	ip, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string)
 	if !ok || ip == "" {
-		if ce := m.logger.Check(zapcore.DebugLevel, "verify_fcrdns: no client IP available"); ce != nil {
-			ce.Write()
-		}
-		return false
+		return false, fmt.Errorf("verify_fcrdns: no client IP available")
 	}
 
 	outcome, detail, cacheHit := m.app.Verify(ip, m.hostnameRe, m.forwardPolicy)
@@ -120,7 +133,7 @@ func (m VerifyFCrDNS) Match(r *http.Request) bool {
 		ce.Write(fields...)
 	}
 
-	return allowed
+	return allowed, nil
 }
 
 // parseForwardPolicy maps a Caddyfile forward_policy token to its enum
@@ -155,7 +168,8 @@ func parseUnknownPolicy(s string) (fcrdns.UnknownPolicy, error) {
 }
 
 var (
-	_ caddy.Module             = (*VerifyFCrDNS)(nil)
-	_ caddy.Provisioner        = (*VerifyFCrDNS)(nil)
-	_ caddyhttp.RequestMatcher = (*VerifyFCrDNS)(nil)
+	_ caddy.Module                      = (*VerifyFCrDNS)(nil)
+	_ caddy.Provisioner                 = (*VerifyFCrDNS)(nil)
+	_ caddyhttp.RequestMatcher          = (*VerifyFCrDNS)(nil)
+	_ caddyhttp.RequestMatcherWithError = (*VerifyFCrDNS)(nil)
 )

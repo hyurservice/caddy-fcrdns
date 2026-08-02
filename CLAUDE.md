@@ -433,6 +433,22 @@ checking first.
   it. Don't fight this by re-pinning older versions unless there's a
   concrete reason to support an older Go - it's cost time before for no
   lasting benefit.
+- **When validating from a *consuming* repo (e.g.
+  `../containers/hyurservice`) right after pushing a fix here, pin the exact
+  commit** - `xcaddy build --with github.com/hyurservice/caddy-fcrdns` (no
+  version) resolves through Go's module proxy (`proxy.golang.org` by
+  default), which can keep serving an already-cached "latest" for a bit
+  after a fresh push, especially if an earlier build in the same session
+  already resolved a lookup against this module. This produced a real,
+  confusing failure once: a build appeared to use the just-pushed
+  `CELLibrary` code but actually linked a commit from before it existed
+  (`go version -m ./caddy | grep caddy-fcrdns` showed the wrong hash),
+  which read exactly like `expression verify_fcrdns(...)` being broken when
+  the module itself was fine. Use `--with
+  github.com/hyurservice/caddy-fcrdns@<full-commit-hash>` to force fetching
+  that exact commit and sidestep the ambiguity entirely - `go version -m` on
+  the built binary is the way to confirm which commit actually got linked,
+  not just trusting the build succeeded.
 
 ## Not yet done
 

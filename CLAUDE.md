@@ -440,6 +440,33 @@ non-crawler Naver services never checked here. `require_forward_confirm`
 (the default) since no forward-confirmation gap was found, same as
 Bing/Yandex.
 
+**Coc Coc (coccocbot): officially documented, and unlike Naver, the docs
+fetched cleanly.** Their own page
+(`help.coccoc.com/en/search-engine/coccoc-robots`, redirects to
+`coccoc.com/search/console/en/coc-coc-robots`) states the method
+explicitly: reverse DNS, "the host name must end with '.coccoc.com'",
+forward-confirmed - and explicitly states no IP range list is published,
+same situation as Baidu/Yandex (FCrDNS is the only official method here,
+not a supplement to a maintained static list).
+
+Validated live: 4 IPs across a `/24` (`103.131.71.193`, `.1`, `.100`,
+`.50`) all reverse-resolve to `bot-<ip-with-dashes>.coccoc.com`, all
+forward-confirm cleanly, all share the same ASN (`AS45899`, "VNPT Corp" -
+Vietnam's largest telecom; unlike Facebook's dedicated AS this one likely
+also carries unrelated retail traffic, so treat the ASN match as
+supporting context, not an independent verification signal the way it was
+for Facebook).
+
+hostname_pattern is `^bot-[0-9-]+\.coccoc\.com$`, not just `\.coccoc\.com$`
+as the docs literally state - same narrowing reasoning as Yandex/Naver:
+the real crawler traffic consistently uses a `bot-<ip>.` prefix, and
+trusting the bare official suffix could match unrelated Coc Coc
+infrastructure never checked here. Note this pattern is anchored at both
+ends (`^...$`), unlike every other crawler's pattern here which is
+suffix-only (`\....$`) - `bot-` is a *prefix* convention, not a
+subdomain, so a suffix-only anchor wouldn't exclude anything before it.
+`require_forward_confirm` (the default) since no gap was found.
+
 ## Testing conventions
 
 - `fcrdns` package tests use a fake `Resolver` (function fields), never real
@@ -492,6 +519,6 @@ Bing/Yandex.
 - Wired into `../containers/hyurservice/caddy/Dockerfile` (pinned to a
   tagged release, not a floating version - see README.md's Installation
   section for why) and its Caddyfile's `(allowed_crawlers)` snippet, using
-  `expression` (Baidu, Bing, Yandex, Naver) - merged to that repo's
+  `expression` (Baidu, Bing, Yandex, Naver, Coc Coc) - merged to that repo's
   `master` and live in production.
 - No CI configured.

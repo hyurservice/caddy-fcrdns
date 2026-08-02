@@ -432,13 +432,33 @@ dedicated ASN (`AS23576`, "NAVER Cloud Corp.", not shared/generic hosting).
 As clean as the Bing/Yandex cases, just resting on empirical validation
 alone rather than an official recommendation too.
 
-hostname_pattern is `\.crawl\.[0-9-]+\.web\.naver\.com$`, not just
+hostname_pattern is `^crawl\.[0-9-]+\.web\.naver\.com$`, not just
 `\.web\.naver\.com$` - narrowed to the specific `crawl.<ip>.` naming
 convention actually observed, same reasoning as Yandex's `spider.`
 narrowing: an unqualified `.web.naver.com` suffix might also match other,
 non-crawler Naver services never checked here. `require_forward_confirm`
 (the default) since no forward-confirmation gap was found, same as
 Bing/Yandex.
+
+**Real bug, caught live in production, not just in review: the pattern
+was originally shipped as `\.crawl\.[0-9-]+\.web\.naver\.com$` (leading
+`\.`, copying the Baidu/Bing/Yandex convention) and it never matched a
+single real Naver hostname.** `crawl` is the *first* label in this
+hostname - unlike Baidu's `baiduspider-<ip>.crawl.baidu.com` or Bing's
+`msnbot-<ip>.search.msn.com`, where the crawl/search subdomain is preceded
+by another label (so a literal `.` genuinely precedes it), Naver's
+`crawl.<ip>.web.naver.com` has nothing before `crawl` at all. A leading
+`\.` there requires a dot that doesn't exist, so the pattern silently
+rejected every genuine Yeti request - the exact same "prefix, not
+subdomain" distinction already correctly handled for Coc Coc's `^bot-...$`
+pattern below, just not re-checked here even though the hostname shape is
+identical. Every `@naver_verified`/`@naver_confirmed_spoof` check against
+real Naver traffic came back `rejected` (and aborted) until this was
+caught from a live cache entry and the fix (anchor with `^`, drop the
+leading `\.`) was verified against every real hostname collected here -
+**via the actual regex, in code, not by eyeballing `host` output** (that's
+precisely how this shipped wrong the first time). Re-run that check
+against any future pattern change here before trusting it.
 
 **Coc Coc (coccocbot): officially documented, and unlike Naver, the docs
 fetched cleanly.** Their own page

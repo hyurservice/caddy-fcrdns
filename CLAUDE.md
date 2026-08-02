@@ -410,6 +410,36 @@ would risk treating non-crawler Yandex traffic as a verified bot. Only the
 IPs, so don't assume they exist or follow the same convention without
 checking first.
 
+**Naver (Yeti): empirically clean, but - unlike the others above - not
+confirmed against an official citation.** Attempted to fetch Naver's own
+docs directly (`searchadvisor.naver.com`, `help.naver.com`) via both
+`WebFetch` and plain `curl` - both either errored or served a JS-rendered
+shell with no real content in the raw HTML (same symptom as the VTB
+sandbox site encountered earlier in this project's history), so there's no
+"here's the exact quote from their own page" citation the way there is for
+Bing/Yandex/Facebook. Search aggregators gave conflicting claims (one said
+Naver publishes an official IP JSON, another said the opposite and pointed
+to reverse DNS instead) - same unreliable-aggregator pattern as the
+Facebook case, so neither was trusted without direct confirmation, and
+direct confirmation wasn't obtainable here.
+
+Validated empirically instead: 5 candidate Yeti IPs from community
+sources, spanning different `/22`-ish ranges, all reverse-resolve to the
+same clean pattern - `crawl.<ip-with-dashes>.web.naver.com` (e.g.
+`125.209.235.170` -> `crawl.125-209-235-170.web.naver.com`) - all tested
+ones forward-confirm cleanly with no gap, and all belong to the same
+dedicated ASN (`AS23576`, "NAVER Cloud Corp.", not shared/generic hosting).
+As clean as the Bing/Yandex cases, just resting on empirical validation
+alone rather than an official recommendation too.
+
+hostname_pattern is `\.crawl\.[0-9-]+\.web\.naver\.com$`, not just
+`\.web\.naver\.com$` - narrowed to the specific `crawl.<ip>.` naming
+convention actually observed, same reasoning as Yandex's `spider.`
+narrowing: an unqualified `.web.naver.com` suffix might also match other,
+non-crawler Naver services never checked here. `require_forward_confirm`
+(the default) since no forward-confirmation gap was found, same as
+Bing/Yandex.
+
 ## Testing conventions
 
 - `fcrdns` package tests use a fake `Resolver` (function fields), never real
@@ -459,12 +489,9 @@ checking first.
 - Facebook/Meta isn't addable at all right now, not just unvalidated - see
   above; there's no official pattern to implement against, unlike Yahoo/
   Amazonbot where the gap is just finding real example IPs.
-- Wired into `../containers/hyurservice/caddy/Dockerfile` and its Caddyfile,
-  merged to that repo's `master` (Baidu, Bing, and Yandex) - but that
-  Caddyfile's `(allowed_crawlers)` snippet still uses the buggy
-  `@name { header_regexp ...; verify_fcrdns ... }` pattern (see "The
-  matcher-set ordering bug" above) and is currently **disabled** in that
-  repo's live config while this fix lands. Needs to be rewritten to use
-  `expression` and re-enabled - not done yet as of this module's CEL
-  support landing.
+- Wired into `../containers/hyurservice/caddy/Dockerfile` (pinned to a
+  tagged release, not a floating version - see README.md's Installation
+  section for why) and its Caddyfile's `(allowed_crawlers)` snippet, using
+  `expression` (Baidu, Bing, Yandex, Naver) - merged to that repo's
+  `master` and live in production.
 - No CI configured.

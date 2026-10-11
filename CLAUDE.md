@@ -510,6 +510,26 @@ subdomain, so a suffix-only anchor wouldn't exclude anything before it.
   it. Don't fight this by re-pinning older versions unless there's a
   concrete reason to support an older Go - it's cost time before for no
   lasting benefit.
+- **`caddyhttp`'s CEL matcher support can change its cel-go import path out
+  from under this module with no warning** - this happened for real between
+  Caddy v2.11.4 and v2.11.7, which switched `CELMatcherImpl`/
+  `NewMatcherCELLibrary` from `github.com/google/cel-go` to the renamed
+  `cel.dev/cel-go` module. Since `../containers/hyurservice/caddy/Dockerfile`
+  builds from the floating `caddy:builder`/`caddy:latest` tags, that broke
+  its build with no code change on either side - `celmatcher.go` still
+  implemented the old interface, so `go build`/`go test` here kept passing
+  (they don't exercise the real `caddyhttp` package the way xcaddy's build
+  does) while the actual xcaddy build failed with a type mismatch between
+  the two cel-go packages' `*cel.Type`/`cel.Library`. Fixed in v0.2.0 by
+  switching the three imports in `celmatcher.go` to `cel.dev/cel-go/...` and
+  bumping `go.mod`'s `caddyserver/caddy/v2` + `cel.dev/cel-go` to match
+  whatever Caddy version is current at the time (`go get
+  github.com/caddyserver/caddy/v2@latest cel.dev/cel-go@latest && go mod
+  tidy`, then re-validate with the real xcaddy build below - don't trust
+  `go test` alone for this class of break). If this recurs, diff
+  `curl -s https://raw.githubusercontent.com/caddyserver/caddy/v<old>/go.mod`
+  against the `v<new>` tag's `go.mod` for the `cel` line to confirm the same
+  cause before assuming something else broke.
 - **When validating from a *consuming* repo (e.g.
   `../containers/hyurservice`) right after pushing a fix here, pin the exact
   commit** - `xcaddy build --with github.com/hyurservice/caddy-fcrdns` (no
